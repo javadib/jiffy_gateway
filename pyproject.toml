@@ -9,6 +9,8 @@ dependencies = [
     "djangorestframework>=3.15",
     "djangorestframework-simplejwt>=5.3",
     "drf-spectacular>=0.27",
+    "celery>=5.4",
+    "redis>=5.0",
 ]
 
 
@@ -18,7 +20,6 @@ dev = [
     "pytest>=8.0",
     "pytest-django>=4.8",
     "factory-boy>=3.3",
-    "psycopg[binary]>=3.1",
 ]
 
 [tool.pytest.ini_options]
