@@ -1,0 +1,40 @@
+{% extends "drf_spectacular/swagger_ui.html" %}
+
+{% block head %}
+  {{ block.super }}
+  <style>
+    /* Always render editable JSON bodies left-to-right. Swagger UI's request
+       body textareas otherwise inherit the browser's automatic bidi detection,
+       which flips to RTL as soon as the first strong RTL character is typed. */
+    .swagger-ui textarea,
+    .swagger-ui .body-param__text,
+    .swagger-ui .body-param textarea {
+      direction: ltr !important;
+      text-align: left !important;
+      unicode-bidi: embed !important;
+    }
+  </style>
+{% endblock head %}
+
+{% block body %}
+  {{ block.super }}
+  <script>
+    // Ctrl+Enter (or Cmd+Enter on macOS) triggers the Execute button of the
+    // operation currently in focus, mirroring a click on "Execute".
+    document.addEventListener('keydown', function (event) {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') {
+        return;
+      }
+      var active = document.activeElement;
+      var block = active && active.closest ? active.closest('.opblock') : null;
+      if (!block) {
+        block = document.querySelector('.opblock.is-open');
+      }
+      var executeButton = block ? block.querySelector('button.execute') : null;
+      if (executeButton) {
+        executeButton.click();
+        event.preventDefault();
+      }
+    });
+  </script>
+{% endblock body %}
