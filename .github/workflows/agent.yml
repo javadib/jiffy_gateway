@@ -1,0 +1,20 @@
+name: Agent (MiMo) Auto-Implement Issue
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i -g @mimo-ai/cli
+      - name: Run MiMo
+        env:
+          MIMO_API_KEY: ${{ secrets.MIMO_API_KEY }}
+        run: |
+          mimo run "Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
+          ${{ github.event.issue.body }}"
