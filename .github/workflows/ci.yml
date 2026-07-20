@@ -10,24 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test
-      # Non-production placeholder secrets so settings can be imported in CI.
-      SECRET_KEY: ci-secret-key-not-for-production
-      JWT_SECRET_KEY: ci-jwt-secret-key-not-for-production
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/bnext_db
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: bnext_db
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      DJANGO_SECRET_KEY: ci-secret-key-not-for-production
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
