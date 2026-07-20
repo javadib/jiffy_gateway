@@ -137,7 +137,7 @@ REST_FRAMEWORK = {
 
 # drf-spectacular
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Jiffy Gateway API',
+    'TITLE': 'Jiffy API Gateway',
     'DESCRIPTION': 'Central server for Jiffy: receives task requests, runs an LLM coding agent, and reports back.',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
