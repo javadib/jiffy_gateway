@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.1 (2026-07-20)
+
+### Bug Fixes
+
+- Resolve review feedback from @gemini-code-assist
+  ([`976c02e`](https://github.com/javadib/jiffy_gateway/commit/976c02eb581ffa7769c563478925295183a5f522))
+
+
 ## v1.0.0 (2026-07-20)
 
 - Initial Release
