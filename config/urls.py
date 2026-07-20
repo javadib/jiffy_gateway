@@ -18,7 +18,10 @@ from django.contrib import admin
 from django.urls import path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
+from config.views import meta
+
 urlpatterns = [
+    path('', meta, name='meta'),
     path('admin/', admin.site.urls),
 
     # API documentation

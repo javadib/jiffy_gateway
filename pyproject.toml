@@ -10,3 +10,40 @@ dependencies = [
     "djangorestframework-simplejwt>=5.3",
     "drf-spectacular>=0.27",
 ]
+
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "factory-boy>=3.3",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = "tests.py test_*.py *_tests.py"
+addopts = "--tb=short -q"
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["config/settings/base.py:__version__"]
+branch = "master"
+changelog_file = "CHANGELOG.md"
+build_command = ""
+upload_to_pypi = false
+upload_to_release = true
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["feat", "fix", "refactor", "perf", "docs", "chore", "ci"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "refactor", "perf"]
+
+[tool.semantic_release.remote]
+type = "github"
+
+[tool.semantic_release.remote.token]
+env = "GH_TOKEN"
+
+[tool.semantic_release.changelog]
+exclude_commit_patterns = ["^chore", "^ci"]
