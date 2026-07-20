@@ -5,7 +5,7 @@ WORKDIR /app
 ARG APP_VERSION=dev
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && \
+    gcc && \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
@@ -22,20 +22,14 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 && \
-    rm -rf /var/lib/apt/lists/*
-
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
-COPY . .
+COPY --chown=app:app . .
 
-RUN python manage.py collectstatic --noinput 2>/dev/null || true
-
-RUN chown -R app:app /app
+RUN python manage.py collectstatic --noinput
 
 USER app
 
