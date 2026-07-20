@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 # Quick-start development settings - unsuitable for production
@@ -137,7 +137,7 @@ REST_FRAMEWORK = {
 
 # drf-spectacular
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Jiffy Gateway API',
+    'TITLE': 'Jiffy API Gateway',
     'DESCRIPTION': 'Central server for Jiffy: receives task requests, runs an LLM coding agent, and reports back.',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
