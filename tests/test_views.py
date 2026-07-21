@@ -1,7 +1,5 @@
 """Tests for ingestion endpoints."""
 
-import hashlib
-import hmac
 import json
 from unittest.mock import MagicMock, patch
 
@@ -24,28 +22,22 @@ class TestGitHubIngest(TestCase):
             "callback_secret": "callback-secret-123",
         }
 
-    def _sign_body(self, body: bytes) -> str:
-        digest = hmac.new(self.secret.encode(), body, hashlib.sha256).hexdigest()
-        return f"sha256={digest}"
-
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
     def test_valid_request_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis.return_value = MagicMock(set=MagicMock(return_value=True))
         mock_task.apply_async.return_value = MagicMock(id="celery-123")
-        # Execute on_commit callbacks immediately
         mock_transaction.on_commit.side_effect = lambda cb: cb()
         mock_transaction.atomic.return_value.__enter__ = MagicMock()
         mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -58,16 +50,15 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(task.repo_url, self.payload["repo_url"])
         mock_task.apply_async.assert_called_once()
 
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_invalid_signature_returns_401(self, mock_redis, mock_task):
+    def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=wrong",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256="sha256=wrong",
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -75,17 +66,32 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
+    @patch("apps.ingestion.views.execute_task")
+    @patch("apps.ingestion.views.get_redis")
+    def test_missing_token_returns_401(self, mock_redis, mock_task):
+        body = json.dumps(self.payload).encode()
+        request = self.factory.post(
+            "/api/ingest/github/",
+            data=body,
+            content_type="application/json",
+        )
+
+        response = GitHubIngestView.as_view()(request)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Task.objects.count(), 0)
+
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_missing_fields_returns_400(self, mock_redis, mock_task):
         incomplete_payload = {"repo_url": "https://github.com/user/repo"}
         body = json.dumps(incomplete_payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -93,7 +99,7 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_invalid_url_returns_400(self, mock_redis, mock_task):
@@ -101,10 +107,9 @@ class TestGitHubIngest(TestCase):
         invalid_payload["repo_url"] = "not-a-url"
         body = json.dumps(invalid_payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -112,16 +117,15 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_non_dict_payload_returns_400(self, mock_redis, mock_task):
         body = json.dumps(["not", "a", "dict"]).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -129,7 +133,7 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
@@ -144,19 +148,17 @@ class TestGitHubIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
         response1 = GitHubIngestView.as_view()(request1)
         self.assertEqual(response1.status_code, 202)
 
         request2 = self.factory.post(
-            "/api/ingest/github/",
+            "/api/ingest/github/?token=test-github-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
         )
         response2 = GitHubIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
@@ -176,7 +178,7 @@ class TestGitLabIngest(TestCase):
             "callback_secret": "callback-secret-456",
         }
 
-    @patch.dict("os.environ", {"GITLAB_WEBHOOK_SECRET": "test-gitlab-token"})
+    @patch.dict("os.environ", {"GITLAB_INGEST_TOKEN": "test-gitlab-token"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
@@ -189,10 +191,9 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitlab/",
+            "/api/ingest/gitlab/?token=test-gitlab-token",
             data=body,
             content_type="application/json",
-            HTTP_X_GITLAB_TOKEN=self.token,
         )
 
         response = GitLabIngestView.as_view()(request)
@@ -202,16 +203,15 @@ class TestGitLabIngest(TestCase):
         task = Task.objects.first()
         self.assertEqual(task.provider, "gitlab")
 
-    @patch.dict("os.environ", {"GITLAB_WEBHOOK_SECRET": "test-gitlab-token"})
+    @patch.dict("os.environ", {"GITLAB_INGEST_TOKEN": "test-gitlab-token"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitlab/",
+            "/api/ingest/gitlab/?token=wrong-token",
             data=body,
             content_type="application/json",
-            HTTP_X_GITLAB_TOKEN="wrong-token",
         )
 
         response = GitLabIngestView.as_view()(request)
@@ -219,7 +219,23 @@ class TestGitLabIngest(TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITLAB_WEBHOOK_SECRET": "test-gitlab-token"})
+    @patch.dict("os.environ", {"GITLAB_INGEST_TOKEN": "test-gitlab-token"})
+    @patch("apps.ingestion.views.execute_task")
+    @patch("apps.ingestion.views.get_redis")
+    def test_missing_token_returns_401(self, mock_redis, mock_task):
+        body = json.dumps(self.payload).encode()
+        request = self.factory.post(
+            "/api/ingest/gitlab/",
+            data=body,
+            content_type="application/json",
+        )
+
+        response = GitLabIngestView.as_view()(request)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Task.objects.count(), 0)
+
+    @patch.dict("os.environ", {"GITLAB_INGEST_TOKEN": "test-gitlab-token"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
@@ -234,18 +250,16 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/gitlab/",
+            "/api/ingest/gitlab/?token=test-gitlab-token",
             data=body,
             content_type="application/json",
-            HTTP_X_GITLAB_TOKEN=self.token,
         )
         GitLabIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/ingest/gitlab/",
+            "/api/ingest/gitlab/?token=test-gitlab-token",
             data=body,
             content_type="application/json",
-            HTTP_X_GITLAB_TOKEN=self.token,
         )
         response2 = GitLabIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
@@ -265,10 +279,7 @@ class TestGiteaIngest(TestCase):
             "callback_secret": "callback-secret-789",
         }
 
-    def _sign_body(self, body: bytes) -> str:
-        return hmac.new(self.secret.encode(), body, hashlib.sha256).hexdigest()
-
-    @patch.dict("os.environ", {"GITEA_WEBHOOK_SECRET": "test-gitea-secret"})
+    @patch.dict("os.environ", {"GITEA_INGEST_TOKEN": "test-gitea-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
@@ -281,10 +292,9 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitea/",
+            "/api/ingest/gitea/?token=test-gitea-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_GITEA_SIGNATURE=self._sign_body(body),
         )
 
         response = GiteaIngestView.as_view()(request)
@@ -294,16 +304,15 @@ class TestGiteaIngest(TestCase):
         task = Task.objects.first()
         self.assertEqual(task.provider, "gitea")
 
-    @patch.dict("os.environ", {"GITEA_WEBHOOK_SECRET": "test-gitea-secret"})
+    @patch.dict("os.environ", {"GITEA_INGEST_TOKEN": "test-gitea-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_invalid_signature_returns_401(self, mock_redis, mock_task):
+    def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitea/",
+            "/api/ingest/gitea/?token=wrong",
             data=body,
             content_type="application/json",
-            HTTP_X_GITEA_SIGNATURE="wrong",
         )
 
         response = GiteaIngestView.as_view()(request)
@@ -311,7 +320,23 @@ class TestGiteaIngest(TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(Task.objects.count(), 0)
 
-    @patch.dict("os.environ", {"GITEA_WEBHOOK_SECRET": "test-gitea-secret"})
+    @patch.dict("os.environ", {"GITEA_INGEST_TOKEN": "test-gitea-secret"})
+    @patch("apps.ingestion.views.execute_task")
+    @patch("apps.ingestion.views.get_redis")
+    def test_missing_token_returns_401(self, mock_redis, mock_task):
+        body = json.dumps(self.payload).encode()
+        request = self.factory.post(
+            "/api/ingest/gitea/",
+            data=body,
+            content_type="application/json",
+        )
+
+        response = GiteaIngestView.as_view()(request)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Task.objects.count(), 0)
+
+    @patch.dict("os.environ", {"GITEA_INGEST_TOKEN": "test-gitea-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
@@ -326,18 +351,16 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/gitea/",
+            "/api/ingest/gitea/?token=test-gitea-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_GITEA_SIGNATURE=self._sign_body(body),
         )
         GiteaIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/ingest/gitea/",
+            "/api/ingest/gitea/?token=test-gitea-secret",
             data=body,
             content_type="application/json",
-            HTTP_X_GITEA_SIGNATURE=self._sign_body(body),
         )
         response2 = GiteaIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
