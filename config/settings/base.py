@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import tomllib
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -21,6 +22,15 @@ DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 _allowed_hosts_raw = os.environ.get("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_raw.split(",") if h.strip()] if _allowed_hosts_raw else ["localhost", "127.0.0.1"]
 
+
+__version__ = "1.4.1"
+
+try:
+    with open(BASE_DIR / "pyproject.toml", "rb") as f:
+        _pyproject = tomllib.load(f)
+        __version__ = _pyproject["project"]["version"]
+except (FileNotFoundError, KeyError, tomllib.TOMLDecodeError):
+    pass
 
 # Application definition
 
@@ -149,6 +159,14 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Jiffy API Gateway',
     'DESCRIPTION': 'Central server for Jiffy: receives task requests, runs an LLM coding agent, and reports back.',
-    'VERSION': '1.0.0',
+    'VERSION': __version__,
     'SERVE_INCLUDE_SCHEMA': False,
+    'SECURITY': [{'X-Jiffy-Token': []}],
+    'COMPONENT_SECURITY_DEFINITIONS': {
+        'X-Jiffy-Token': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'X-Jiffy-Token',
+        },
+    },
 }
