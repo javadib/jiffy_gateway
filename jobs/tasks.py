@@ -7,7 +7,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, acks_late=True, queue="execute")
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True, queue="execute", autoretry_for=(Exception,))
 def execute_task(self, task_id: int) -> None:
     """Execute a coding task in an isolated container.
 

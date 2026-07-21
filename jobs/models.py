@@ -35,7 +35,7 @@ class Task(models.Model):
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="queued"
     )
-    callback_url = models.URLField()
+    callback_url = models.URLField(max_length=500)
     callback_secret = models.CharField(max_length=128)
     pr_url = models.URLField(null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)

@@ -4,7 +4,9 @@ import json
 import logging
 
 import redis
+from celery import uuid as celery_uuid
 from django.conf import settings
+from django.db import transaction
 from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -43,6 +45,11 @@ def _store_payload(task_id: int, payload: dict) -> None:
 
 
 def _handle_ingestion(provider: str, data: dict) -> Response:
+    if not isinstance(data, dict):
+        return Response(
+            {"error": "Invalid payload format. Expected a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     repo_url = data.get("repo_url")
     issue_external_id = data.get("issue_external_id")
     thread_text = data.get("thread_text")
@@ -79,28 +86,30 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
         )
         return Response({"status": "already_queued"}, status=status.HTTP_202_ACCEPTED)
 
-    task = Task.objects.create(
-        provider=provider,
-        repo_url=repo_url,
-        issue_external_id=issue_external_id,
-        callback_url=callback_url,
-        callback_secret=callback_secret,
-        status="queued",
-    )
+    task_id = celery_uuid()
 
-    payload = {"thread_text": thread_text, "repo_token": repo_token}
-    _store_payload(task.id, payload)
+    with transaction.atomic():
+        task = Task.objects.create(
+            provider=provider,
+            repo_url=repo_url,
+            issue_external_id=issue_external_id,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+            status="queued",
+            celery_task_id=task_id,
+        )
 
-    result = execute_task.delay(task.id)
-    task.celery_task_id = result.id
-    task.save(update_fields=["celery_task_id", "updated_at"])
+        payload = {"thread_text": thread_text, "repo_token": repo_token}
+        _store_payload(task.id, payload)
+
+    transaction.on_commit(lambda: execute_task.apply_async(args=[task.id], task_id=task_id))
 
     logger.info(
         "Ingested %s issue %s as task %d (celery=%s)",
         provider,
         issue_external_id,
         task.id,
-        result.id,
+        task_id,
     )
 
     return Response({"task_id": task.id, "status": "queued"}, status=status.HTTP_202_ACCEPTED)
