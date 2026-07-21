@@ -31,9 +31,14 @@ class TestGitHubIngest(TestCase):
     @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_valid_request_returns_202(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_valid_request_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis.return_value = MagicMock(set=MagicMock(return_value=True))
-        mock_task.delay.return_value = MagicMock(id="celery-123")
+        mock_task.apply_async.return_value = MagicMock(id="celery-123")
+        # Execute on_commit callbacks immediately
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
@@ -51,7 +56,7 @@ class TestGitHubIngest(TestCase):
         task = Task.objects.first()
         self.assertEqual(task.provider, "github")
         self.assertEqual(task.repo_url, self.payload["repo_url"])
-        mock_task.delay.assert_called_once()
+        mock_task.apply_async.assert_called_once()
 
     @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
@@ -91,11 +96,15 @@ class TestGitHubIngest(TestCase):
     @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_duplicate_delivery_returns_202_no_new_task(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_duplicate_delivery_returns_202_no_new_task(self, mock_transaction, mock_redis, mock_task):
         mock_redis_instance = MagicMock()
         mock_redis_instance.set.side_effect = [True, None, None]
         mock_redis.return_value = mock_redis_instance
-        mock_task.delay.return_value = MagicMock(id="celery-123")
+        mock_task.apply_async.return_value = MagicMock(id="celery-123")
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
@@ -134,9 +143,13 @@ class TestGitLabIngest(TestCase):
     @patch.dict("os.environ", {"GITLAB_WEBHOOK_SECRET": "test-gitlab-token"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_valid_request_returns_202(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_valid_request_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis.return_value = MagicMock(set=MagicMock(return_value=True))
-        mock_task.delay.return_value = MagicMock(id="celery-456")
+        mock_task.apply_async.return_value = MagicMock(id="celery-456")
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
@@ -173,11 +186,15 @@ class TestGitLabIngest(TestCase):
     @patch.dict("os.environ", {"GITLAB_WEBHOOK_SECRET": "test-gitlab-token"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_duplicate_delivery_returns_202(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_duplicate_delivery_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis_instance = MagicMock()
         mock_redis_instance.set.side_effect = [True, None, None]
         mock_redis.return_value = mock_redis_instance
-        mock_task.delay.return_value = MagicMock(id="celery-456")
+        mock_task.apply_async.return_value = MagicMock(id="celery-456")
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
@@ -218,9 +235,13 @@ class TestGiteaIngest(TestCase):
     @patch.dict("os.environ", {"GITEA_WEBHOOK_SECRET": "test-gitea-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_valid_request_returns_202(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_valid_request_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis.return_value = MagicMock(set=MagicMock(return_value=True))
-        mock_task.delay.return_value = MagicMock(id="celery-789")
+        mock_task.apply_async.return_value = MagicMock(id="celery-789")
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
@@ -257,11 +278,15 @@ class TestGiteaIngest(TestCase):
     @patch.dict("os.environ", {"GITEA_WEBHOOK_SECRET": "test-gitea-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
-    def test_duplicate_delivery_returns_202(self, mock_redis, mock_task):
+    @patch("apps.ingestion.views.transaction")
+    def test_duplicate_delivery_returns_202(self, mock_transaction, mock_redis, mock_task):
         mock_redis_instance = MagicMock()
         mock_redis_instance.set.side_effect = [True, None, None]
         mock_redis.return_value = mock_redis_instance
-        mock_task.delay.return_value = MagicMock(id="celery-789")
+        mock_task.apply_async.return_value = MagicMock(id="celery-789")
+        mock_transaction.on_commit.side_effect = lambda cb: cb()
+        mock_transaction.atomic.return_value.__enter__ = MagicMock()
+        mock_transaction.atomic.return_value.__exit__ = MagicMock(return_value=False)
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
