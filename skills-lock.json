@@ -7,6 +7,18 @@
       "skillPath": "skills/code-documenter/SKILL.md",
       "computedHash": "15ef3f7b9cd824bd1ade51ad6e519ad1339b6d585887c0ec69d0fe14889387d8"
     },
+    "django-patterns": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/django-patterns/SKILL.md",
+      "computedHash": "0a361f02b98c81149a3e70e156e27b8c1ccd06dec4274f4cb530f45f9d8c147f"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"
+    },
     "ponytail": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",

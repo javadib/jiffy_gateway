@@ -273,3 +273,7 @@ If the user did not provide a title/branch name in the request text, the agent m
 - Telegram and Slack integrations — not in current scope.
 - Multi-language (monorepo) detection and multi-image orchestration — deferred beyond phase one.
 - Any UI beyond Django Admin for task inspection.
+
+## Commit Message
+Types: feat | fix | refactor | perf | chore | docs
+After completing any task, Write a git commit message with conventional commit pattern in final report
