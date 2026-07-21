@@ -14,12 +14,18 @@ class TestGitHubIngest(TestCase):
         self.factory = RequestFactory()
         self.secret = "test-github-secret"
         self.payload = {
-            "repo_url": "https://github.com/user/repo",
-            "issue_external_id": "123",
-            "thread_text": "Fix the bug in module X",
-            "repo_token": "ghp_test_token",
-            "callback_url": "https://example.com/callback",
-            "callback_secret": "callback-secret-123",
+            "repo": {
+                "url": "https://github.com/user/repo",
+                "token": "ghp_test_token",
+            },
+            "issue": {
+                "text": "Fix the bug in module X",
+                "issue_external_id": "123",
+            },
+            "callback": {
+                "url": "https://example.com/callback",
+                "secret": "callback-secret-123",
+            },
         }
 
     @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
@@ -35,7 +41,7 @@ class TestGitHubIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -47,7 +53,7 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(Task.objects.count(), 1)
         task = Task.objects.first()
         self.assertEqual(task.provider, "github")
-        self.assertEqual(task.repo_url, self.payload["repo_url"])
+        self.assertEqual(task.repo_url, self.payload["repo"]["url"])
         mock_task.apply_async.assert_called_once()
 
     @patch.dict("os.environ", {"GITHUB_INGEST_TOKEN": "test-github-secret"})
@@ -56,7 +62,7 @@ class TestGitHubIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/?token=wrong",
+            "/api/github/ingestion?token=wrong",
             data=body,
             content_type="application/json",
         )
@@ -72,7 +78,7 @@ class TestGitHubIngest(TestCase):
     def test_missing_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
         )
@@ -86,10 +92,10 @@ class TestGitHubIngest(TestCase):
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_missing_fields_returns_400(self, mock_redis, mock_task):
-        incomplete_payload = {"repo_url": "https://github.com/user/repo"}
+        incomplete_payload = {"repo": {"url": "https://github.com/user/repo"}}
         body = json.dumps(incomplete_payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -103,11 +109,23 @@ class TestGitHubIngest(TestCase):
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
     def test_invalid_url_returns_400(self, mock_redis, mock_task):
-        invalid_payload = self.payload.copy()
-        invalid_payload["repo_url"] = "not-a-url"
+        invalid_payload = {
+            "repo": {
+                "url": "not-a-url",
+                "token": "ghp_test_token",
+            },
+            "issue": {
+                "text": "Fix the bug in module X",
+                "issue_external_id": "123",
+            },
+            "callback": {
+                "url": "https://example.com/callback",
+                "secret": "callback-secret-123",
+            },
+        }
         body = json.dumps(invalid_payload).encode()
         request = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -123,7 +141,7 @@ class TestGitHubIngest(TestCase):
     def test_non_dict_payload_returns_400(self, mock_redis, mock_task):
         body = json.dumps(["not", "a", "dict"]).encode()
         request = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -148,7 +166,7 @@ class TestGitHubIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -156,7 +174,7 @@ class TestGitHubIngest(TestCase):
         self.assertEqual(response1.status_code, 202)
 
         request2 = self.factory.post(
-            "/api/ingest/github/?token=test-github-secret",
+            "/api/github/ingestion?token=test-github-secret",
             data=body,
             content_type="application/json",
         )
@@ -170,12 +188,18 @@ class TestGitLabIngest(TestCase):
         self.factory = RequestFactory()
         self.token = "test-gitlab-token"
         self.payload = {
-            "repo_url": "https://gitlab.com/user/repo",
-            "issue_external_id": "456",
-            "thread_text": "Add feature Y",
-            "repo_token": "glpat-test-token",
-            "callback_url": "https://example.com/callback",
-            "callback_secret": "callback-secret-456",
+            "repo": {
+                "url": "https://gitlab.com/user/repo",
+                "token": "glpat-test-token",
+            },
+            "issue": {
+                "text": "Add feature Y",
+                "issue_external_id": "456",
+            },
+            "callback": {
+                "url": "https://example.com/callback",
+                "secret": "callback-secret-456",
+            },
         }
 
     @patch.dict("os.environ", {"GITLAB_INGEST_TOKEN": "test-gitlab-token"})
@@ -191,7 +215,7 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitlab/?token=test-gitlab-token",
+            "/api/gitlab/ingestion?token=test-gitlab-token",
             data=body,
             content_type="application/json",
         )
@@ -209,7 +233,7 @@ class TestGitLabIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitlab/?token=wrong-token",
+            "/api/gitlab/ingestion?token=wrong-token",
             data=body,
             content_type="application/json",
         )
@@ -225,7 +249,7 @@ class TestGitLabIngest(TestCase):
     def test_missing_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitlab/",
+            "/api/gitlab/ingestion",
             data=body,
             content_type="application/json",
         )
@@ -250,14 +274,14 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/gitlab/?token=test-gitlab-token",
+            "/api/gitlab/ingestion?token=test-gitlab-token",
             data=body,
             content_type="application/json",
         )
         GitLabIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/ingest/gitlab/?token=test-gitlab-token",
+            "/api/gitlab/ingestion?token=test-gitlab-token",
             data=body,
             content_type="application/json",
         )
@@ -271,12 +295,18 @@ class TestGiteaIngest(TestCase):
         self.factory = RequestFactory()
         self.secret = "test-gitea-secret"
         self.payload = {
-            "repo_url": "https://gitea.com/user/repo",
-            "issue_external_id": "789",
-            "thread_text": "Refactor module Z",
-            "repo_token": "gitea_test_token",
-            "callback_url": "https://example.com/callback",
-            "callback_secret": "callback-secret-789",
+            "repo": {
+                "url": "https://gitea.com/user/repo",
+                "token": "gitea_test_token",
+            },
+            "issue": {
+                "text": "Refactor module Z",
+                "issue_external_id": "789",
+            },
+            "callback": {
+                "url": "https://example.com/callback",
+                "secret": "callback-secret-789",
+            },
         }
 
     @patch.dict("os.environ", {"GITEA_INGEST_TOKEN": "test-gitea-secret"})
@@ -292,7 +322,7 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitea/?token=test-gitea-secret",
+            "/api/gitea/ingestion?token=test-gitea-secret",
             data=body,
             content_type="application/json",
         )
@@ -310,7 +340,7 @@ class TestGiteaIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitea/?token=wrong",
+            "/api/gitea/ingestion?token=wrong",
             data=body,
             content_type="application/json",
         )
@@ -326,7 +356,7 @@ class TestGiteaIngest(TestCase):
     def test_missing_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/ingest/gitea/",
+            "/api/gitea/ingestion",
             data=body,
             content_type="application/json",
         )
@@ -351,14 +381,14 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/ingest/gitea/?token=test-gitea-secret",
+            "/api/gitea/ingestion?token=test-gitea-secret",
             data=body,
             content_type="application/json",
         )
         GiteaIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/ingest/gitea/?token=test-gitea-secret",
+            "/api/gitea/ingestion?token=test-gitea-secret",
             data=body,
             content_type="application/json",
         )
