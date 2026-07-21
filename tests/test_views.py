@@ -96,6 +96,42 @@ class TestGitHubIngest(TestCase):
     @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
     @patch("apps.ingestion.views.execute_task")
     @patch("apps.ingestion.views.get_redis")
+    def test_invalid_url_returns_400(self, mock_redis, mock_task):
+        invalid_payload = self.payload.copy()
+        invalid_payload["repo_url"] = "not-a-url"
+        body = json.dumps(invalid_payload).encode()
+        request = self.factory.post(
+            "/api/ingest/github/",
+            data=body,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
+        )
+
+        response = GitHubIngestView.as_view()(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Task.objects.count(), 0)
+
+    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch("apps.ingestion.views.execute_task")
+    @patch("apps.ingestion.views.get_redis")
+    def test_non_dict_payload_returns_400(self, mock_redis, mock_task):
+        body = json.dumps(["not", "a", "dict"]).encode()
+        request = self.factory.post(
+            "/api/ingest/github/",
+            data=body,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=self._sign_body(body),
+        )
+
+        response = GitHubIngestView.as_view()(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Task.objects.count(), 0)
+
+    @patch.dict("os.environ", {"GITHUB_WEBHOOK_SECRET": "test-github-secret"})
+    @patch("apps.ingestion.views.execute_task")
+    @patch("apps.ingestion.views.get_redis")
     @patch("apps.ingestion.views.transaction")
     def test_duplicate_delivery_returns_202_no_new_task(self, mock_transaction, mock_redis, mock_task):
         mock_redis_instance = MagicMock()

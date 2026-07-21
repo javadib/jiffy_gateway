@@ -50,39 +50,18 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
             {"error": "Invalid payload format. Expected a JSON object."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    repo_url = data.get("repo_url")
-    issue_external_id = data.get("issue_external_id")
-    thread_text = data.get("thread_text")
-    repo_token = data.get("repo_token")
-    callback_url = data.get("callback_url")
-    callback_secret = data.get("callback_secret")
 
-    missing = []
-    if not repo_url:
-        missing.append("repo_url")
-    if not issue_external_id:
-        missing.append("issue_external_id")
-    if not thread_text:
-        missing.append("thread_text")
-    if not repo_token:
-        missing.append("repo_token")
-    if not callback_url:
-        missing.append("callback_url")
-    if not callback_secret:
-        missing.append("callback_secret")
+    serializer = IngestionPayloadSerializer(data=data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    if missing:
-        return Response(
-            {"error": f"Missing required fields: {', '.join(missing)}"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    lock_key = f"jiffy:lock:issue:{provider}:{issue_external_id}"
+    validated = serializer.validated_data
+    lock_key = f"jiffy:lock:issue:{provider}:{validated['issue_external_id']}"
     if not _acquire_lock(lock_key):
         logger.info(
             "Duplicate delivery for %s issue %s — skipping",
             provider,
-            issue_external_id,
+            validated["issue_external_id"],
         )
         return Response({"status": "already_queued"}, status=status.HTTP_202_ACCEPTED)
 
@@ -91,23 +70,22 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
     with transaction.atomic():
         task = Task.objects.create(
             provider=provider,
-            repo_url=repo_url,
-            issue_external_id=issue_external_id,
-            callback_url=callback_url,
-            callback_secret=callback_secret,
+            repo_url=validated["repo_url"],
+            issue_external_id=validated["issue_external_id"],
+            callback_url=validated["callback_url"],
+            callback_secret=validated["callback_secret"],
             status="queued",
             celery_task_id=task_id,
         )
 
-        payload = {"thread_text": thread_text, "repo_token": repo_token}
-        _store_payload(task.id, payload)
+        _store_payload(task.id, validated)
 
     transaction.on_commit(lambda: execute_task.apply_async(args=[task.id], task_id=task_id))
 
     logger.info(
         "Ingested %s issue %s as task %d (celery=%s)",
         provider,
-        issue_external_id,
+        validated["issue_external_id"],
         task.id,
         task_id,
     )
