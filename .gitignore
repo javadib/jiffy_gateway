@@ -2,3 +2,4 @@
 /.venv/
 /.mimocode/
 /.idea/
+__pycache__/
