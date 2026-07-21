@@ -89,7 +89,7 @@ class Task(models.Model):
     provider = models.CharField(max_length=20)   # "github" | "gitlab" | "gitea"
     repo_url = models.CharField(max_length=500)
     programming_language = models.CharField(max_length=50, null=True, blank=True)  # LLM-extracted, not detected from files
-    issue_external_id = models.CharField(max_length=100)
+    external_issue_id = models.CharField(max_length=100)
     title = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted task_title
     branch_base = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted, defaults to repo default branch if absent
     branch_name = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted new_branch_name, or generated
@@ -140,7 +140,7 @@ celery -A jiffy worker -Q execute --concurrency=3 -n execute@%h
 - `acks_late=True` and `task_reject_on_worker_lost=True` on the execute task, so a killed worker re-queues the job instead of silently dropping it.
 - **Retry policy (task execution)**: retry only on transient errors (network timeout, git push conflict, Docker daemon hiccup), **max 3 attempts, 1-minute interval between attempts**. Do **not** retry on logical/agent failures (e.g. agent couldn't complete the task) — mark `failed` and report immediately via callback.
 - **Retry policy (callback dispatch)**: if `callback_url` is unreachable, retry **up to 3 times**. If all 3 attempts fail, log the failure clearly (the task remains `failed`/unreported from the edge's perspective) — do not silently drop it. There is currently no separate admin-alerting mechanism for a fully-failed callback; this is a known gap, not a design decision to revisit only if it becomes a real operational problem.
-- Use a Redis-based lock (e.g. `redis.lock` with a key like `jiffy:lock:issue:{provider}:{issue_external_id}`) before enqueueing, to guard against duplicate webhook deliveries triggering the same task twice.
+- Use a Redis-based lock (e.g. `redis.lock` with a key like `jiffy:lock:issue:{provider}:{external_issue_id}`) before enqueueing, to guard against duplicate webhook deliveries triggering the same task twice.
 
 ## Job Pipeline (inside the Celery task)
 
@@ -276,4 +276,4 @@ If the user did not provide a title/branch name in the request text, the agent m
 
 ## Commit Message
 Types: feat | fix | refactor | perf | chore | docs
-After completing any task, Write a git commit message with conventional commit pattern in final report
+After completing any task, Just write a commit message (not directly commit) with conventional commit pattern in final report

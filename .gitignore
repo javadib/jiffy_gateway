@@ -3,3 +3,4 @@
 /.mimocode/
 /.idea/
 __pycache__/
+.env

@@ -8,7 +8,7 @@ from django.test import RequestFactory, TestCase
 from apps.ingestion.views import GiteaIngestView, GitHubIngestView, GitLabIngestView
 from jobs.models import Task
 
-AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"
+AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"  # Django META prefix + header name
 
 
 class TestGitHubIngest(TestCase):
@@ -22,7 +22,7 @@ class TestGitHubIngest(TestCase):
             },
             "issue": {
                 "text": "Fix the bug in module X",
-                "issue_external_id": "123",
+                "external_issue_id": "123",
             },
             "callback": {
                 "url": "https://example.com/callback",
@@ -121,7 +121,7 @@ class TestGitHubIngest(TestCase):
             },
             "issue": {
                 "text": "Fix the bug in module X",
-                "issue_external_id": "123",
+                "external_issue_id": "123",
             },
             "callback": {
                 "url": "https://example.com/callback",
@@ -203,7 +203,7 @@ class TestGitLabIngest(TestCase):
             },
             "issue": {
                 "text": "Add feature Y",
-                "issue_external_id": "456",
+                "external_issue_id": "456",
             },
             "callback": {
                 "url": "https://example.com/callback",
@@ -314,7 +314,7 @@ class TestGiteaIngest(TestCase):
             },
             "issue": {
                 "text": "Refactor module Z",
-                "issue_external_id": "789",
+                "external_issue_id": "789",
             },
             "callback": {
                 "url": "https://example.com/callback",

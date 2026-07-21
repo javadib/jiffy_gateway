@@ -22,7 +22,7 @@ class Task(models.Model):
     programming_language = models.CharField(
         max_length=50, null=True, blank=True
     )  # LLM-extracted
-    issue_external_id = models.CharField(max_length=100)
+    external_issue_id = models.CharField(max_length=100)
     title = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted
     branch_base = models.CharField(
         max_length=255, null=True, blank=True

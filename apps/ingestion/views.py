@@ -56,12 +56,12 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     validated = serializer.validated_data
-    lock_key = f"jiffy:lock:issue:{provider}:{validated['issue']['issue_external_id']}"
+    lock_key = f"jiffy:lock:issue:{provider}:{validated['issue']['external_issue_id']}"
     if not _acquire_lock(lock_key):
         logger.info(
             "Duplicate delivery for %s issue %s — skipping",
             provider,
-            validated["issue"]["issue_external_id"],
+            validated["issue"]["external_issue_id"],
         )
         return Response({"status": "already_queued"}, status=status.HTTP_202_ACCEPTED)
 
@@ -71,7 +71,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
         task = Task.objects.create(
             provider=provider,
             repo_url=validated["repo"]["url"],
-            issue_external_id=validated["issue"]["issue_external_id"],
+            external_issue_id=validated["issue"]["external_issue_id"],
             callback_url=validated["callback"]["url"],
             callback_secret=validated["callback"]["secret"],
             status="queued",
@@ -85,7 +85,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
     logger.info(
         "Ingested %s issue %s as task %d (celery=%s)",
         provider,
-        validated["issue"]["issue_external_id"],
+        validated["issue"]["external_issue_id"],
         task.id,
         task_id,
     )
@@ -96,7 +96,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
 class GitHubIngestView(APIView):
     """Ingest webhook from GitHub.
 
-    Auth: ``X-Jiffy-Token`` header.
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []
@@ -116,7 +116,7 @@ class GitHubIngestView(APIView):
 class GitLabIngestView(APIView):
     """Ingest webhook from GitLab.
 
-    Auth: ``X-Jiffy-Token`` header.
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []
@@ -136,7 +136,7 @@ class GitLabIngestView(APIView):
 class GiteaIngestView(APIView):
     """Ingest webhook from Gitea.
 
-    Auth: ``X-Jiffy-Token`` header.
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []

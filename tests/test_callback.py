@@ -18,7 +18,7 @@ class TestSendCallback(TestCase):
         self.task = Task.objects.create(
             provider="github",
             repo_url="https://github.com/user/repo",
-            issue_external_id="123",
+            external_issue_id="123",
             callback_url="https://example.com/callback",
             callback_secret="callback-secret-123",
             status="done",

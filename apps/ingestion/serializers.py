@@ -10,7 +10,7 @@ class RepoSerializer(serializers.Serializer):
 
 class IssueSerializer(serializers.Serializer):
     text = serializers.CharField(help_text="Full issue/thread text for the coding agent")
-    issue_external_id = serializers.CharField(max_length=100, help_text="External issue/thread ID from the git provider")
+    external_issue_id = serializers.CharField(max_length=100, help_text="External issue/thread ID from the git provider")
 
 
 class CallbackSerializer(serializers.Serializer):

@@ -1,6 +1,6 @@
 [project]
 name = "jiffy-gateway"
-version = "0.1.0"
+version = "1.2.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "celery>=5.4",
     "redis>=5.0",
     "requests>=2.34.2",
+    "djangorestframework-stubs>=3.17.0",
 ]
 
 

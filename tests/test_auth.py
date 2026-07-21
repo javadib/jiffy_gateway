@@ -7,7 +7,7 @@ from apps.ingestion.auth import get_ingest_secret, verify_ingest_token
 
 
 def _make_request(token: str = None) -> MagicMock:
-    """Build a mock request with an optional X-Jiffy-Token header."""
+    """Build a mock request with an optional X_JIFFY_TOKEN header."""
     request = MagicMock()
     if token is not None:
         request.META = {"HTTP_X_JIFFY_TOKEN": token}

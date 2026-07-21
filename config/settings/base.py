@@ -161,12 +161,12 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'Central server for Jiffy: receives task requests, runs an LLM coding agent, and reports back.',
     'VERSION': __version__,
     'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'X-Jiffy-Token': []}],
+    'SECURITY': [{'X_JIFFY_TOKEN': []}],
     'COMPONENT_SECURITY_DEFINITIONS': {
-        'X-Jiffy-Token': {
+        'X_JIFFY_TOKEN': {
             'type': 'apiKey',
             'in': 'header',
-            'name': 'X-Jiffy-Token',
+            'name': 'X_JIFFY_TOKEN',
         },
     },
 }

@@ -7,7 +7,7 @@ AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"
 
 
 def verify_ingest_token(request, expected_secret: str) -> bool:
-    """Verify the ``X-Jiffy-Token`` header against an expected secret.
+    """Verify the ``X_JIFFY_TOKEN`` header against an expected secret.
 
     A single, uniform header for all providers — Jiffy's own edge
     components call Jiffy's own endpoints, so there is no need to
