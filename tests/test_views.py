@@ -8,6 +8,8 @@ from django.test import RequestFactory, TestCase
 from apps.ingestion.views import GiteaIngestView, GitHubIngestView, GitLabIngestView
 from jobs.models import Task
 
+AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"
+
 
 class TestGitHubIngest(TestCase):
     def setUp(self):
@@ -41,9 +43,10 @@ class TestGitHubIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -62,9 +65,10 @@ class TestGitHubIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/github/ingestion?token=wrong",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "wrong"},
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -95,9 +99,10 @@ class TestGitHubIngest(TestCase):
         incomplete_payload = {"repo": {"url": "https://github.com/user/repo"}}
         body = json.dumps(incomplete_payload).encode()
         request = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -125,9 +130,10 @@ class TestGitHubIngest(TestCase):
         }
         body = json.dumps(invalid_payload).encode()
         request = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -141,9 +147,10 @@ class TestGitHubIngest(TestCase):
     def test_non_dict_payload_returns_400(self, mock_redis, mock_task):
         body = json.dumps(["not", "a", "dict"]).encode()
         request = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
 
         response = GitHubIngestView.as_view()(request)
@@ -166,17 +173,19 @@ class TestGitHubIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
         response1 = GitHubIngestView.as_view()(request1)
         self.assertEqual(response1.status_code, 202)
 
         request2 = self.factory.post(
-            "/api/github/ingestion?token=test-github-secret",
+            "/api/github/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-github-secret"},
         )
         response2 = GitHubIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
@@ -215,9 +224,10 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/gitlab/ingestion?token=test-gitlab-token",
+            "/api/gitlab/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitlab-token"},
         )
 
         response = GitLabIngestView.as_view()(request)
@@ -233,9 +243,10 @@ class TestGitLabIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/gitlab/ingestion?token=wrong-token",
+            "/api/gitlab/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "wrong-token"},
         )
 
         response = GitLabIngestView.as_view()(request)
@@ -274,16 +285,18 @@ class TestGitLabIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/gitlab/ingestion?token=test-gitlab-token",
+            "/api/gitlab/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitlab-token"},
         )
         GitLabIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/gitlab/ingestion?token=test-gitlab-token",
+            "/api/gitlab/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitlab-token"},
         )
         response2 = GitLabIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
@@ -322,9 +335,10 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/gitea/ingestion?token=test-gitea-secret",
+            "/api/gitea/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitea-secret"},
         )
 
         response = GiteaIngestView.as_view()(request)
@@ -340,9 +354,10 @@ class TestGiteaIngest(TestCase):
     def test_invalid_token_returns_401(self, mock_redis, mock_task):
         body = json.dumps(self.payload).encode()
         request = self.factory.post(
-            "/api/gitea/ingestion?token=wrong",
+            "/api/gitea/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "wrong"},
         )
 
         response = GiteaIngestView.as_view()(request)
@@ -381,16 +396,18 @@ class TestGiteaIngest(TestCase):
 
         body = json.dumps(self.payload).encode()
         request1 = self.factory.post(
-            "/api/gitea/ingestion?token=test-gitea-secret",
+            "/api/gitea/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitea-secret"},
         )
         GiteaIngestView.as_view()(request1)
 
         request2 = self.factory.post(
-            "/api/gitea/ingestion?token=test-gitea-secret",
+            "/api/gitea/ingestion",
             data=body,
             content_type="application/json",
+            **{AUTH_HEADER: "test-gitea-secret"},
         )
         response2 = GiteaIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)

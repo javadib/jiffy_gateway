@@ -6,16 +6,13 @@ from unittest.mock import MagicMock, patch
 from apps.ingestion.auth import get_ingest_secret, verify_ingest_token
 
 
-def _make_request(query_string: str = "") -> MagicMock:
-    """Build a mock request with the given query string."""
+def _make_request(token: str = None) -> MagicMock:
+    """Build a mock request with an optional X-Jiffy-Token header."""
     request = MagicMock()
-    params = {}
-    if query_string:
-        for pair in query_string.split("&"):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                params[k] = v
-    request.query_params = params
+    if token is not None:
+        request.META = {"HTTP_X_JIFFY_TOKEN": token}
+    else:
+        request.META = {}
     return request
 
 
@@ -23,31 +20,32 @@ class TestVerifyIngestToken:
     """Tests for the shared verify_ingest_token function."""
 
     def test_valid_token(self):
-        request = _make_request("token=secret123")
+        request = _make_request("secret123")
         assert verify_ingest_token(request, "secret123") is True
 
     def test_invalid_token(self):
-        request = _make_request("token=wrong")
+        request = _make_request("wrong")
         assert verify_ingest_token(request, "secret123") is False
 
-    def test_missing_token_param(self):
+    def test_missing_header(self):
+        request = _make_request()
+        assert verify_ingest_token(request, "secret123") is False
+
+    def test_empty_header(self):
         request = _make_request("")
         assert verify_ingest_token(request, "secret123") is False
 
-    def test_empty_token_param(self):
-        request = _make_request("token=")
-        assert verify_ingest_token(request, "secret123") is False
-
     def test_no_secret_configured(self):
-        request = _make_request("token=anything")
+        request = _make_request("anything")
         assert verify_ingest_token(request, "") is False
 
     def test_tampered_token(self):
-        request = _make_request("token=secret123!")
+        request = _make_request("secret123!")
         assert verify_ingest_token(request, "secret123") is False
 
-    def test_token_in_other_param_not_accepted(self):
-        request = _make_request("notoken=secret123")
+    def test_other_header_not_accepted(self):
+        request = MagicMock()
+        request.META = {"HTTP_X_OTHER_TOKEN": "secret123"}
         assert verify_ingest_token(request, "secret123") is False
 
 
