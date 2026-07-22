@@ -104,7 +104,8 @@ class GitHubIngestView(APIView):
     serializer_class = IngestionPayloadSerializer
 
     def post(self, request: Request) -> Response:
-        if not verify_ingest_token(request, get_ingest_secret("github")):
+        secret = get_ingest_secret("github")
+        if not verify_ingest_token(request, secret):
             return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         try:
             data = json.loads(request.body)

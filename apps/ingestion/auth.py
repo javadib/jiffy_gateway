@@ -3,7 +3,7 @@
 import hmac
 import os
 
-AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"
+AUTH_HEADER = "X_JIFFY_TOKEN"
 
 
 def verify_ingest_token(request, expected_secret: str) -> bool:

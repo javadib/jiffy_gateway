@@ -14,8 +14,13 @@ import os
 import tomllib
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+#todo: maybe pass form env (docker, kuber)
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-dev-only-key")
 DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
@@ -162,11 +167,13 @@ SPECTACULAR_SETTINGS = {
     'VERSION': __version__,
     'SERVE_INCLUDE_SCHEMA': False,
     'SECURITY': [{'X_JIFFY_TOKEN': []}],
-    'COMPONENT_SECURITY_DEFINITIONS': {
-        'X_JIFFY_TOKEN': {
-            'type': 'apiKey',
-            'in': 'header',
-            'name': 'X_JIFFY_TOKEN',
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'X_JIFFY_TOKEN': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X_JIFFY_TOKEN',
+            },
         },
     },
 }
