@@ -1,30 +1,33 @@
-# CLAUDE.md — Jiffy Gateway
-
-This file gives Claude Code the technical context needed to work on the **Jiffy central server** codebase. Read this before making architectural decisions, adding dependencies, or generating code.
+This file gives the technical context needed to work on the **Jiffy central server** codebase. Read this before making architectural decisions, adding dependencies, or generating code.
 
 ## What This Project Is
 
-The central server for Jiffy: it receives pre-filtered task requests (full Issue/thread history) from lightweight edge components (GitHub Actions, GitLab CI jobs, Gitea Actions), uses an LLM to extract structured requirements from that free-form thread text, runs a coding agent against the target repository in an isolated environment, commits/pushes the result, optionally opens a Pull/Merge Request and/or requests a code review, and reports back via a callback URL provided in the original request.
+The central server for Jiffy: it receives pre-filtered task requests (full Issue/thread history) from lightweight edge components (GitHub Actions, GitLab CI jobs, Gitea Actions), provisions an isolated sandbox container, clones the target repository into it, and hands the entire rest of the work — understanding the request, installing whatever it needs, implementing the change, verifying it, committing, pushing, optionally opening a PR, and optionally mentioning a code-review bot — to a coding agent running inside that container. The Gateway itself does not parse requirements, decide on languages/versions, or orchestrate commit/push/PR as separate steps; its own responsibility is deliberately thin: authenticate the request, provision the sandbox, clone the repo, hand off to the agent with clear instructions, capture the agent's final result, and report it via a callback URL.
 
-The edge components (mention detection, thread collection) are **out of scope** for this codebase — they live in separate repos/workflows. This project only implements the receiving endpoint, the job pipeline, and the callback reporter.
+The edge components (mention detection, thread collection) are **out of scope** for this codebase — they live in separate repos/workflows. This project only implements the receiving endpoint, container provisioning + clone, the agent hand-off, and the callback reporter.
 
 ## End-to-End Flow (Authoritative)
 
-This is the full sequence once a request reaches the Gateway. Every other section in this document is a detail of one of these steps.
+This is the full sequence once a request reaches the Gateway. Only steps 1–3 and 6–7 are Gateway-orchestrated code; step 4 (analysis through PR) happens entirely inside the agent's own execution and is not broken into separate Gateway-tracked phases.
 
 1. **Receive** the whole request body (the Issue/thread) from the edge component / git server via the ingestion endpoint.
-2. **Extract requirements via LLM**: pass the raw issue/thread text to an LLM to extract structured fields — `task_title`, `branch_base`, `new_branch_name`, `pr_request` (bool), `code_review_request` (bool), `programming_language`, and the actual task description itself (what the coding agent is being asked to do). There is **no fixed tag/keyword format** the user must follow — extraction works on natural free-form text, the way a human reading the issue would understand it.
-3. **Plan**: the LLM produces an execution plan for the coding agent based on the extracted task.
-4. **Provision container**: build/select a specific container based on the extracted `programming_language` (see Language Detection & Container Images).
-5. **Clone** the repo into the container.
-6. **Execute** the planned task inside the container.
-7. **Verify changes** — the agent checks its own work (e.g. running tests/build/lint where available) before finalizing.
-8. **Commit & push** — always happens once changes are verified, regardless of `pr_request` / `code_review_request`.
-9. **Open PR (conditional)** — if `pr_request` is true, open the Pull/Merge Request now.
-10. **Post final report** to `callback_url` — includes status, summary, branch name, PR url (if any), and, **if `code_review_request` is true, an explicit mention of the code-review bot** appended to the report content.
-11. **Code review is not performed by this codebase.** Jiffy Gateway never reviews code itself. When `code_review_request` is true, the only thing this system does is make sure the final report text mentions the code-review bot's tag, so that whoever posts the report as a comment on the Issue/PR naturally re-triggers the same mention-detection mechanism used to invoke Jiffy in the first place — just aimed at the review bot instead. The review bot then picks this up as its own, entirely separate, asynchronous task/loop (out of scope for this repo). If the review surfaces feedback the user wants acted on, that comes back as a **new** mention of Jiffy on the same thread, i.e. a brand-new `execute_task` run — not a continuation of this one.
+2. **Provision the generic sandbox container** (script-driven) — always the same image (see Generic Sandbox Image below), regardless of what the task turns out to need.
+3. **Clone** the repo into the container (script-driven, using the injected repo token). This is the last thing the Gateway's own code decides — everything from here on is the agent's responsibility.
+4. **Hand off to the agent**, passing it the raw issue/thread text (verbatim, no pre-parsing) and the path to the cloned source, along with the instruction contract described in Agent Instruction Contract below. From this point, the agent:
+   - analyzes the issue and the repository to determine what's actually being asked, and what languages/tools/runtime versions it needs;
+   - installs anything the generic image doesn't already have;
+   - implements the requested change;
+   - verifies its own work;
+   - commits and pushes using the repo token available to it in the environment;
+   - opens a PR via the provider's tooling if the issue text asked for one;
+   - includes a mention of the code-review bot (in the PR description if a PR was opened, or in its final result summary if not) if the issue text asked for a review — see Code Review Loop.
+5. **Agent emits a final structured result** per the Agent Instruction Contract (status, branch name, PR url if any, summary, error message if failed).
+6. **Container exits**; the worker parses that structured result.
+7. **Post final report** to `callback_url` — status, summary (including the code-review bot mention if the agent included one), branch name, PR url (if any), or `error_message` (if failed).
 
-`pr_request` and `code_review_request` are **independent flags**: a task can request review without a PR, a PR without review, both, or neither (branch is simply pushed and reported). Because the review happens asynchronously through a separate bot/loop, there is no synchronous "review, then patch, then open PR" step inside a single job run — patching in response to review feedback is always a subsequent, separate task.
+There is no Gateway-side `pr_request`/`code_review_request` extraction step, no Gateway-side language/version detection, and no Gateway-side commit/push/PR-opening code — all of that is the agent's job, driven entirely by how it reads the issue text and the repository. The `Task` model may still store `branch_name`, `pr_url`, `programming_language`, etc., but only as **audit/reporting fields populated from the agent's own final output after the fact** — never pre-computed by the Gateway before or during the run.
+
+**No fail-fast before container start for language/runtime.** Since analysis and installation are entirely the agent's responsibility, there is no pre-container check for "is this language supported." If the agent cannot meet the task's environment requirements for any reason, that surfaces only as a failure in its own final result, reported as `status="failed"` via the normal callback path.
 
 ## Tech Stack
 
@@ -73,14 +76,9 @@ Keep the relational DB for **durable metadata only** (status, audit trail, links
 class Task(models.Model):
     STATUS_CHOICES = [
         ("queued", "Queued"),
-        ("extracting", "Extracting requirements"),
-        ("planning", "Planning"),
+        ("provisioning", "Provisioning sandbox"),
         ("cloning", "Cloning"),
-        ("running", "Running"),
-        ("verifying", "Verifying changes"),
-        ("committing", "Committing"),
-        ("pushing", "Pushing"),
-        ("opening_pr", "Opening PR"),
+        ("running", "Running"),   # covers the agent's entire analysis → implement → verify → commit/push → PR sequence
         ("reporting", "Reporting"),
         ("done", "Done"),
         ("failed", "Failed"),
@@ -88,19 +86,14 @@ class Task(models.Model):
 
     provider = models.CharField(max_length=20)   # "github" | "gitlab" | "gitea"
     repo_url = models.CharField(max_length=500)
-    programming_language = models.CharField(max_length=50, null=True, blank=True)  # LLM-extracted, not detected from files
-    external_issue_id = models.CharField(max_length=100)
-    title = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted task_title
-    branch_base = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted, defaults to repo default branch if absent
-    branch_name = models.CharField(max_length=255, null=True, blank=True)  # LLM-extracted new_branch_name, or generated
-    pr_request = models.BooleanField(default=False)   # LLM-extracted
-    code_review_request = models.BooleanField(default=False)  # LLM-extracted; only controls whether the final
-                                                                # report mentions the code-review bot — Jiffy
-                                                                # itself never performs the review (see End-to-End Flow)
+    issue_external_id = models.CharField(max_length=100)
+    programming_language = models.CharField(max_length=50, null=True, blank=True)  # populated from the agent's final
+                                                                                    # result, for audit/reporting only
+    branch_name = models.CharField(max_length=255, null=True, blank=True)  # populated from the agent's final result
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
     callback_url = models.URLField()
     callback_secret = models.CharField(max_length=128)
-    pr_url = models.URLField(null=True, blank=True)
+    pr_url = models.URLField(null=True, blank=True)  # populated from the agent's final result, if it opened one
     error_message = models.TextField(null=True, blank=True)
     celery_task_id = models.CharField(max_length=64, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -111,22 +104,36 @@ The full thread/payload (all Issue comments, metadata) **and the repo access tok
 
 ## Two Endpoints — Ingestion and Callback Dispatch
 
-The Gateway exposes exactly two HTTP surfaces relevant to a task's lifecycle:
+The Gateway exposes exactly two kinds of HTTP surfaces relevant to a task's lifecycle:
 
-1. **Ingestion endpoint** (inbound): receives the task request from the edge component / git server. The payload includes the repo URL, thread history, a **short-lived repo access token** (scoped to clone/push/PR only), a `callback_url`, and a `callback_secret`.
-2. **Callback dispatch** (outbound): once the job finishes (success or failure), the Gateway calls `callback_url` with the signed result. The Gateway itself never posts comments back to the Issue — whatever handles `callback_url` (the git server directly, or an intermediary) is responsible for that, using its own credentials.
+1. **Ingestion endpoints** (inbound, one per provider): `github/ingestion`, `gitlab/ingestion`, `gitea/ingestion`. Each receives the task request from that provider's edge component.
+2. **Callback dispatch** (outbound): once the job finishes (success or failure), the Gateway calls `callback.url` (from the payload) with the signed result. The Gateway itself never posts comments back to the Issue — whatever handles that URL (the git server directly, or an intermediary) is responsible for that, using its own credentials.
 
-The Gateway never holds or stores any chat/comment-posting credential. The repo access token it receives is used strictly for `git clone` / `git push` / opening the PR, for the lifetime of a single job, and is discarded afterward (see below).
+The Gateway never holds or stores any chat/comment-posting credential. The repo access token it receives is used strictly for clone (by the Gateway) and then push/PR (by the agent, inside the container), for the lifetime of a single job, and is discarded afterward.
+
+Note: `*/callback` (e.g. `github/callback`) is **not** an inbound HTTP route — it's internal module naming for the outbound callback-dispatch logic, kept per-provider for organizational consistency with the ingestion routes, not because the dispatch behavior actually differs by provider today.
 
 ## Ingestion Endpoint — Details
 
-- Single Django view (DRF or plain `View`), one per provider or one generic endpoint with a `provider` field in the payload — pick one convention and stay consistent.
-- **Auth**: verify a shared secret / HMAC signature configured per deployment (via env var), specific to each edge component. Reject unauthenticated requests with 401 before touching the DB or Redis.
+- Three separate Django views, one per provider (`github/ingestion`, `gitlab/ingestion`, `gitea/ingestion`) rather than one generic endpoint — kept distinct so each provider's auth secret and payload validation stay independently testable.
+- **Auth**: a shared token read from the `X_JIFFY_TOKEN` request header, verified with a constant-time comparison (`hmac.compare_digest`) against that provider's own configured secret (e.g. `GITHUB_INGEST_TOKEN`, `GITLAB_INGEST_TOKEN`, `GITEA_INGEST_TOKEN` — one env var per provider/deployment, never shared across providers or across teams' installations). Reject with `401` before touching the DB or Redis if missing or mismatched.
+- **Payload shape** (identical across all three providers):
+  ```json
+  {
+    "repo": { "url": "", "token": "" },
+    "issue": { "text": "", "issue_external_id": "" },
+    "callback": { "url": "", "secret": "" }
+  }
+  ```
+  A request missing any of the six leaf fields fails with a clear `400`, not a `KeyError`/`500`.
 - On success:
-  1. Create a `Task` row (`status="queued"`).
-  2. Write the full payload (thread history + repo access token) to Redis (`jiffy:task:{task.id}:payload`).
-  3. Enqueue `execute_task.delay(task.id)` on the `execute` Celery queue.
-  4. Return `202 Accepted` immediately — do not block the HTTP response on job execution.
+  1. Create a `Task` row (`status="queued"`), with `repo_url` from `payload.repo.url` and `issue_external_id` from `payload.issue.issue_external_id`.
+  2. Write the full payload (in this same nested shape) to Redis (`jiffy:task:{task.id}:payload`).
+  3. Acquire the Redis lock (`jiffy:lock:issue:{provider}:{issue_external_id}`) before enqueueing, to guard against duplicate webhook deliveries — if already held, return `202` without creating a duplicate task.
+  4. Enqueue `execute_task.delay(task.id)` on the `execute` Celery queue.
+  5. Return `202 Accepted` immediately — do not block the HTTP response on job execution.
+
+**Secret generation & rotation**: secrets are generated with a cryptographically secure generator (e.g. `openssl rand -hex 32`), unique per provider and per deployment, stored server-side via env var (`.env` with restrictive permissions, or a platform secrets manager for larger deployments) and edge-side via that provider's own CI/CD secrets store. Rotation is manual for phase one — no dual-secret (old+new simultaneously valid) support; a brief mismatch window during rotation is accepted.
 
 ## Celery Configuration
 
@@ -140,7 +147,7 @@ celery -A jiffy worker -Q execute --concurrency=3 -n execute@%h
 - `acks_late=True` and `task_reject_on_worker_lost=True` on the execute task, so a killed worker re-queues the job instead of silently dropping it.
 - **Retry policy (task execution)**: retry only on transient errors (network timeout, git push conflict, Docker daemon hiccup), **max 3 attempts, 1-minute interval between attempts**. Do **not** retry on logical/agent failures (e.g. agent couldn't complete the task) — mark `failed` and report immediately via callback.
 - **Retry policy (callback dispatch)**: if `callback_url` is unreachable, retry **up to 3 times**. If all 3 attempts fail, log the failure clearly (the task remains `failed`/unreported from the edge's perspective) — do not silently drop it. There is currently no separate admin-alerting mechanism for a fully-failed callback; this is a known gap, not a design decision to revisit only if it becomes a real operational problem.
-- Use a Redis-based lock (e.g. `redis.lock` with a key like `jiffy:lock:issue:{provider}:{external_issue_id}`) before enqueueing, to guard against duplicate webhook deliveries triggering the same task twice.
+- Use a Redis-based lock (e.g. `redis.lock` with a key like `jiffy:lock:issue:{provider}:{issue_external_id}`) before enqueueing, to guard against duplicate webhook deliveries triggering the same task twice.
 
 ## Job Pipeline (inside the Celery task)
 
@@ -150,69 +157,61 @@ def execute_task(self, task_id):
     task = Task.objects.get(id=task_id)
     payload = load_payload_from_redis(task_id)  # raises if missing/expired; includes repo token + raw thread text
 
-    update_status(task, "extracting")
-    requirements = extract_requirements_with_llm(payload)  # task_title, branch_base, new_branch_name,
-                                                            # pr_request, code_review_request,
-                                                            # programming_language, task_description
-    apply_extracted_requirements(task, requirements)  # populates + saves the fields above on Task
+    update_status(task, "provisioning")
+    container = start_generic_sandbox_container(task)  # always the same generic image; see Generic Sandbox Image below
 
-    if not requirements.programming_language or not has_image_for(requirements.programming_language):
-        fail_task(task, error_message=f"Unsupported or undetected language: {requirements.programming_language}")
+    update_status(task, "cloning")
+    clone_repo_in_container(container, payload["repo"]["url"], token=payload["repo"]["token"])
+
+    update_status(task, "running")
+    # Everything from here on — analysis, installing what it needs, implementing the change,
+    # verifying it, committing, pushing, opening a PR, mentioning the review bot — is the
+    # agent's own responsibility. The Gateway does not orchestrate these as separate steps.
+    instructions = build_agent_instructions(payload)  # see Agent Instruction Contract below
+    run_agent_in_container(container, instructions)
+
+    result = read_agent_result(container)  # parses the structured result the agent is required to emit
+    stop_and_remove_container(container)
+
+    update_status(task, "reporting")
+    if result.status != "done":
+        fail_task(task, error_message=result.error_message)
         send_callback(task, status="failed", error_message=task.error_message)
         return
 
-    update_status(task, "planning")
-    plan = build_execution_plan(requirements)
+    task.branch_name = result.branch_name
+    task.programming_language = result.programming_language
+    task.pr_url = result.pr_url
+    task.save(update_fields=["branch_name", "programming_language", "pr_url"])
 
-    update_status(task, "cloning")
-    repo_dir = clone_repo(task.repo_url, base=task.branch_base, token=payload["repo_token"])
-
-    branch = task.branch_name or generate_branch_name(task.title)
-
-    update_status(task, "running")
-    result = run_agent_in_container(repo_dir, plan, branch, language=task.programming_language)
-
-    update_status(task, "verifying")
-    verify_changes(repo_dir, result)  # e.g. run tests/build/lint where available
-
-    update_status(task, "committing")
-    commit_changes(repo_dir, message=build_commit_message(task, result))
-
-    update_status(task, "pushing")
-    push_branch(repo_dir, branch, token=payload["repo_token"])
-
-    pr_url = None
-    if task.pr_request:
-        update_status(task, "opening_pr")
-        pr = open_pull_request(task, branch, result.summary, token=payload["repo_token"])
-        pr_url = pr.url
-        task.pr_url = pr_url
-        task.save(update_fields=["pr_url"])
-
-    update_status(task, "reporting")
-    # Jiffy never performs the review itself. If requested, the report content simply
-    # mentions the code-review bot so the same mention-detection loop picks it up as a
-    # brand-new, separate task — see End-to-End Flow, step 11.
-    summary = result.summary
-    if task.code_review_request:
-        summary = append_code_review_bot_mention(summary, branch=branch, pr_url=pr_url)
-
-    send_callback(task, status="done", summary=summary, pr_url=pr_url)
-
+    send_callback(task, status="done", summary=result.summary, pr_url=result.pr_url)
     update_status(task, "done")
-    cleanup(repo_dir)  # also drops the payload/token from Redis if not already expired
 ```
 
 Keep DB writes (`update_status`) short and outside of any long-held lock or open transaction — don't wrap the whole pipeline in `transaction.atomic()`.
 
-## Language Detection & Container Images — Important
+## Generic Sandbox Image — Important
 
-- **One small, specialized image per supported language** (e.g. a Python image, a Node.js/TypeScript image), rather than one large general-purpose image bundling every toolchain. This keeps each image lean, fast to build/pull, and easy to maintain independently.
-- **Phase-one scope**: support a small, explicit set of languages (e.g. Python, Node.js/TypeScript). Do not attempt to support "every language" up front.
-- **No file-based/heuristic detection.** `programming_language` is one of the fields the LLM extracts directly from the issue/thread text during the `extracting` step (see End-to-End Flow, step 2) — the user states or implies the language in their request, the same way they'd tell a human collaborator, with no required tag or fixed format. This removes an extra clone/API-inspection step from the pipeline entirely and avoids the failure modes of marker-file heuristics (e.g. a repo without `requirements.txt` yet, or a misleading root-level file).
-- **Monorepo assumption**: phase one assumes a **single primary language per task**. Multi-language (monorepo) support is explicitly out of scope for now and should be revisited later if needed — do not build speculative multi-image orchestration for it yet.
-- **Unsupported or unextracted language**: if the LLM extraction step doesn't yield a `programming_language`, or it's not one of the currently supported languages, the task **fails immediately** — before any container is provisioned — with a clear `error_message` (e.g. `"Unsupported or undetected language: <value>"`) and is reported as `failed` via the callback. There is **no generic/fallback image** — this is a deliberate consequence of the "specialized image per language" decision, not an oversight.
-- Each language-specific image still bundles: git, the coding agent CLI, and only the toolchain relevant to that language.
+- **One generic sandbox image, not a matrix of per-language/per-version images.** The image is the same for every task regardless of what the task turns out to need.
+- The generic image bundles: **Python, Node.js, and Go** runtimes, plus **git, the coding agent CLI, curl, and build-essential**. This set is fixed and shared — it is not selected or customized per task.
+- **No pre-container language/version detection.** There is only one image, so there is nothing to select.
+- **The agent is responsible for self-provisioning at runtime.** Whatever the task needs beyond the generic set (a specific language/runtime version, a package, a system library) is installed by the agent itself as part of doing the work — this is not a separate Gateway-orchestrated phase (see End-to-End Flow).
+- **Network policy is intentionally broader than a single-language image would need**: an allow-list covering the common registries for the languages in the generic image (PyPI, npm, Go proxy, relevant apt mirrors) plus the git remote for the target provider — not a fully open internet, but wider than "only this one language's registry."
+- Phase-one monorepo assumption (single primary language/target per task) still holds.
+
+## Agent Instruction Contract — Important
+
+This is the core piece of Gateway-authored content in this design: the instructions handed to the agent must be clear and complete enough that **any** coding agent (not just today's specific CLI) can carry out the full request from them alone, without further Gateway-side orchestration.
+
+The instructions passed to the agent must make explicit:
+
+1. The full, verbatim issue/thread text — no summarization or pre-parsing by the Gateway.
+2. The path to the already-cloned source inside the container.
+3. That the agent is responsible for the **entire** rest of the work: figuring out what languages/tools/runtime versions are needed and installing anything missing; implementing the requested change; verifying its own work; committing and pushing using the git credentials available in its environment; opening a PR via the provider's tooling **only if the issue text asks for one**; and, **only if the issue text asks for a code review**, including a mention of the configured code-review-bot handle — in the PR description if it opened a PR, or in its final result summary if it didn't (see Code Review Loop).
+4. A sensible branch-naming convention to fall back on if the issue text doesn't specify a branch name (e.g. a `Jiffy/`-prefixed slug of the task's title), so behavior stays consistent across agents without the Gateway computing the name itself.
+5. **The required final output contract**: the agent must emit a structured result (e.g. JSON, at a well-known location such as `/workspace/.jiffy_result.json`, or as the final line of stdout) containing at least: `status` (`"done"` | `"failed"`), `branch_name`, `pr_url` (if any), `programming_language` (best-effort, for audit purposes), `summary`, and `error_message` (if failed). This contract is what `read_agent_result()` parses — any agent plugged into this system must honor it.
+
+Keep the instruction-building logic (`build_agent_instructions`) in one place, and keep the wording agent-agnostic — don't bake in assumptions specific to today's particular agent CLI's conventions.
 
 ## Payload & Token Handling in Redis
 
@@ -222,35 +221,28 @@ Keep DB writes (`update_status`) short and outside of any long-held lock or open
 
 ## Code Review Loop — Important
 
-- Jiffy Gateway **never performs code review itself**. `code_review_request` is a flag that only changes what goes into the final report text — it does not trigger any review logic in this codebase.
-- When `code_review_request` is true, the final report (sent to `callback_url`, and from there posted as a comment by whatever handles that URL) includes an explicit **mention of the code-review bot**, along with enough context (branch name, and PR url if one was opened) for that bot to know what to look at.
-- Posting that mention re-triggers the same mention-detection mechanism used to invoke Jiffy in the first place — just aimed at the review bot instead. The review bot then runs its own entirely separate task/loop, which is **out of scope for this repo**.
-- The exact mention tag/handle for the code-review bot (e.g. `@jiffy-reviewer`) is **not finalized yet** — for now, implement `append_code_review_bot_mention()` using a single placeholder constant (e.g. read from an env var or a settings constant), and keep the lookup isolated in one small function so the actual mechanism (fixed env var, per-deployment config, part of the ingestion payload, etc.) can be swapped in later without touching the rest of the pipeline.
-- Because the review happens asynchronously through this separate bot/loop, there is **no synchronous "review, then patch, then open PR" step** inside a single job run. If review feedback leads to code changes, that comes back as a **new** mention of Jiffy on the same Issue thread — i.e. a brand-new `execute_task` run, not a continuation of the one that produced the reviewed code.
+- Jiffy Gateway **never performs code review itself**, and no longer even decides whether a review was requested — that's read by the agent directly from the issue text, per the Agent Instruction Contract.
+- If the issue text asks for a review, the agent includes a mention of the code-review bot itself: in the PR description if it opened one, or in its final result summary if it didn't (which the Gateway then forwards as-is in the callback report — no Gateway-side appending logic needed anymore).
+- Posting that mention (wherever it ends up — PR description or Issue comment via the callback report) re-triggers the same mention-detection mechanism used to invoke Jiffy in the first place — just aimed at the review bot instead. The review bot then runs its own entirely separate task/loop, which is **out of scope for this repo**.
+- The exact mention tag/handle for the code-review bot (e.g. `@jiffy-reviewer`) is **not finalized yet** — for now, make it available to the agent as a single placeholder value (e.g. an env var referenced in the instruction contract), so the actual mechanism can be swapped in later without touching the rest of the pipeline.
+- Because the review happens asynchronously through this separate bot/loop, there is **no synchronous "review, then patch, then open PR" step** inside a single job run. If review feedback leads to code changes, that comes back as a **new** mention of Jiffy on the same Issue thread — i.e. a brand-new `execute_task` run.
 
 ## Container Execution
 
-- One Docker container per job, using a **pre-built, language-specific base image** (not built at runtime; see Language Detection & Container Images above).
-- Run with `remove=True` (auto-cleanup), explicit `mem_limit` and `cpus`, and a restricted network (only git remotes / package registries needed for that language — no open internet).
-- Mount the cloned repo as a volume (`/workspace`); inject secrets (scoped git token, task context) via environment variables at run time, never baked into the image.
-- Container output (logs, final diff, agent's summary) is captured and parsed by the worker after the container exits.
+- One Docker container per job, using the **generic sandbox image** (see Generic Sandbox Image above) — never built or customized at runtime.
+- Run with `remove=True` (auto-cleanup), explicit `mem_limit` and `cpus`, and a network allow-list covering the registries/toolchains needed for the languages in the generic image, plus the target provider's git remote.
+- `/workspace` inside the container holds the cloned repo; inject the repo token and any other needed context as environment variables at container start, never baked into the image.
+- The agent has everything it needs inside the container (git, the repo token, provider CLI/tooling) to commit, push, and open a PR itself — the Gateway does not perform these as separate host-side or Gateway-authored steps.
+- The container is destroyed immediately after the agent finishes and its result has been read — the token's exposure window is the lifetime of this single container run.
 
 ## Branch Naming
 
-```python
-def generate_branch_name(title: str) -> str:
-    slug = slugify(title)[:50]
-    if Task.objects.filter(branch_name=f"Jiffy/{slug}").exists():
-        slug = f"{slug}-{uuid.uuid4().hex[:4]}"
-    return f"Jiffy/{slug}"
-```
-
-If the user did not provide a title/branch name in the request text, the agent must extract a concise task title from the thread content before this function is called.
+There is no Gateway-side branch-naming function — the agent decides the branch name itself (using one from the issue text if specified, or a sensible fallback per the Agent Instruction Contract) and reports whatever it used back in its final result. The Gateway only stores what the agent reports; it does not compute or validate the name itself.
 
 ## Callback / Reporting
 
 - After the job finishes (success or failure), POST the result to `task.callback_url`, signed with `task.callback_secret` (HMAC in a header, e.g. `X-Jiffy-Signature`).
-- Payload includes: `task_id`, `status`, `summary` (with the code-review bot mention appended when `code_review_request` is true), `pr_url` (if `pr_request` was true), `error_message` (if failed).
+- Payload includes: `task_id`, `status`, `summary` (as produced by the agent — already includes the code-review bot mention if the agent determined one was needed), `pr_url` (if the agent opened one), `error_message` (if failed).
 - Retry the callback call **up to 3 times** on failure — if the edge/callback endpoint is temporarily unreachable, don't lose the result. Log failures clearly; do not silently drop them. If all 3 attempts fail, the task remains in its final local status (`done`/`failed`) with the report undelivered — this is logged, not silently swallowed.
 - The central server does **not** hold any chat/comment-posting credentials (no GitHub comment token, no Telegram/Slack tokens) — posting the final comment is the responsibility of whatever handles `callback_url` (the git server or an intermediary), not this codebase.
 
@@ -261,11 +253,11 @@ If the user did not provide a title/branch name in the request text, the agent m
 
 ## Coding Conventions
 
-- Standard Django app structure; keep webhook ingestion, job pipeline, and container execution in separate apps/modules (e.g. `ingestion/`, `jobs/`, `execution/`) rather than one monolithic app.
+- Standard Django app structure; keep webhook ingestion, container provisioning/clone, and agent hand-off in separate apps/modules (e.g. `ingestion/`, `execution/`) rather than one monolithic app.
 - Type hints on all new functions.
 - No raw SQL (see Database Strategy above) — this is a hard rule, not a style preference.
-- Settings must read all secrets (HMAC keys for edge auth, callback HMAC keys, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens come from the request payload, not from settings.
-- Favor small, testable functions for each pipeline step (`extract_requirements_with_llm`, `clone_repo`, `run_agent_in_container`, `verify_changes`, `open_pull_request`, `append_code_review_bot_mention`, `send_callback`) so they can be unit-tested independently of Celery/Docker/LLM calls where possible (mock the Docker/API/LLM calls in tests).
+- Settings must read all secrets (`X_JIFFY_TOKEN` expected values per provider, callback HMAC keys, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens come from the request payload, not from settings.
+- Favor small, testable functions for each Gateway-owned step (`start_generic_sandbox_container`, `clone_repo_in_container`, `build_agent_instructions`, `run_agent_in_container`, `read_agent_result`, `send_callback`) so they can be unit-tested independently of Celery/Docker where possible (mock the Docker/agent calls in tests).
 
 ## Out of Scope for This Repo
 
@@ -273,7 +265,3 @@ If the user did not provide a title/branch name in the request text, the agent m
 - Telegram and Slack integrations — not in current scope.
 - Multi-language (monorepo) detection and multi-image orchestration — deferred beyond phase one.
 - Any UI beyond Django Admin for task inspection.
-
-## Commit Message
-Types: feat | fix | refactor | perf | chore | docs
-After completing any task, Just write a commit message (not directly commit) with conventional commit pattern in final report
