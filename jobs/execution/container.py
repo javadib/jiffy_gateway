@@ -306,7 +306,7 @@ def run_agent_in_container(
         )
 
     exit_code, (output, err) = container.exec_run(
-        cmd=["coding-agent-cli"],
+        cmd=["jiffy-agent"],
         demux=True,
         workdir=WORKSPACE,
     )

@@ -118,7 +118,7 @@ CELERY_TASK_ROUTES = {
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 
 # Sandbox container settings
-SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.0.0")
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.1.0")
 SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
 SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
 
