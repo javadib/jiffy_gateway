@@ -1,4 +1,5 @@
 """Manages the lifecycle of a Docker container for a task."""
+import json
 import logging
 import os
 import time
@@ -302,6 +303,34 @@ def clone_repo_in_container(
 # Agent execution
 # ---------------------------------------------------------------------------
 
+OPENCODE_CONFIG_PATH = "/home/jiffy/.config/opencode/config.json"
+
+
+def _get_opencode_model(container: Container) -> str:
+    """Read the configured LLM model from opencode's config inside the container.
+
+    Returns the model name or "unknown" if not found.
+    """
+    try:
+        exit_code, (output, _) = container.exec_run(
+            cmd=["cat", OPENCODE_CONFIG_PATH], demux=True
+        )
+        if exit_code == 0 and output:
+            config = json.loads(output)
+            # opencode config has provider.model format like "anthropic/claude-sonnet-4-20250514"
+            model = config.get("model")
+            if model:
+                return model
+            # Check nested provider config
+            provider = config.get("provider", {})
+            if isinstance(provider, dict):
+                model = provider.get("model")
+                if model:
+                    return model
+    except (json.JSONDecodeError, Exception):
+        pass
+    return "unknown"
+
 
 def run_agent_in_container(
     container: Container,
@@ -310,7 +339,8 @@ def run_agent_in_container(
     timeout_seconds: int = 3600,
 ) -> None:
     """Run the coding agent inside the container with the given instructions."""
-    logger.info("[%d] Running agent in container %s (timeout=%ds)", task_id, container.short_id, timeout_seconds)
+    model = _get_opencode_model(container)
+    logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id, timeout_seconds, model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
