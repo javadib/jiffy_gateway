@@ -71,7 +71,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
         task = Task.objects.create(
             provider=provider,
             repo_url=validated["repo"]["url"],
-            external_issue_id=validated["issue"]["external_issue_id"],
+            issue_external_id=validated["issue"]["external_issue_id"],
             callback_url=validated["callback"]["url"],
             callback_secret=validated["callback"]["secret"],
             status="queued",
