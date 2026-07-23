@@ -196,6 +196,23 @@ def start_generic_sandbox_container(
         if repo_url:
             networking_config = _build_network_config(repo_url)
 
+        # Build volume mounts for host config files
+        volumes = {}
+        opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
+        if opencode_config:
+            config_path = Path(opencode_config)
+            if config_path.is_file():
+                volumes[str(config_path.resolve())] = {
+                    "bind": "/home/jiffy/.config/opencode/config.json",
+                    "mode": "ro",
+                }
+            else:
+                logger.warning(
+                    "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+                    task_id,
+                    opencode_config,
+                )
+
         container = client.containers.run(
             settings.SANDBOX_IMAGE,
             detach=True,
@@ -205,6 +222,7 @@ def start_generic_sandbox_container(
             cpuset_cpus=str(settings.SANDBOX_CPU_LIMIT),
             environment=env_vars,
             network="jiffy-sandbox-net",
+            volumes=volumes if volumes else None,
             **networking_config,
         )
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
@@ -305,8 +323,14 @@ def run_agent_in_container(
             f"Failed to write instructions file: {(err or b'').decode(errors='replace')}"
         )
 
+    # Read instructions from file and pass to opencode
+    # Use login shell (-l) so .profile is sourced and all tools (nvm, uv, etc.) are available
+    run_cmd = (
+        'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
+        'opencode run --auto "$INSTRUCTIONS"'
+    )
     exit_code, (output, err) = container.exec_run(
-        cmd=["jiffy-agent"],
+        cmd=["bash", "-l", "-c", run_cmd],
         demux=True,
         workdir=WORKSPACE,
     )

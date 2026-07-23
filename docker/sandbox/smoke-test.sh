@@ -17,6 +17,44 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 echo "=== Sandbox Image Smoke Tests ==="
 
+# --- User context (check first) ---
+
+echo ""
+echo "--- User context ---"
+CURRENT_USER=$(whoami)
+echo "  Running as: $CURRENT_USER"
+if [ "$CURRENT_USER" = "jiffy" ]; then
+  pass "Running as non-root jiffy user"
+else
+  fail "Expected to run as jiffy user, running as $CURRENT_USER"
+fi
+
+# --- Shell profile files ---
+
+echo ""
+echo "--- Shell profiles ---"
+if [ -f /home/jiffy/.bashrc ]; then
+  pass ".bashrc exists"
+else
+  fail ".bashrc not found"
+fi
+if [ -f /home/jiffy/.profile ]; then
+  pass ".profile exists"
+else
+  fail ".profile not found"
+fi
+
+# --- PATH check ---
+
+echo ""
+echo "--- PATH ---"
+echo "  PATH=$PATH"
+if echo "$PATH" | grep -q "/usr/local/bin"; then
+  pass "/usr/local/bin is in PATH"
+else
+  fail "/usr/local/bin not in PATH"
+fi
+
 # --- Version managers ---
 
 echo ""
@@ -80,30 +118,14 @@ echo ""
 echo "--- opencode ---"
 if command -v opencode >/dev/null 2>&1; then
   opencode version >/dev/null 2>&1 && pass "opencode is installed and responds to version" || fail "opencode version failed"
+  # Verify it's accessible from /usr/local/bin (not just root's ~/.local/bin)
+  if [ -x /usr/local/bin/opencode ]; then
+    pass "opencode copied to /usr/local/bin and executable"
+  else
+    fail "opencode not found at /usr/local/bin"
+  fi
 else
   fail "opencode not found on PATH"
-fi
-
-# --- Agent wrapper ---
-
-echo ""
-echo "--- jiffy-agent wrapper ---"
-if [ -x /usr/local/bin/jiffy-agent ]; then
-  pass "jiffy-agent wrapper exists and is executable"
-else
-  fail "jiffy-agent wrapper not found or not executable"
-fi
-
-# --- Non-root user ---
-
-echo ""
-echo "--- User context ---"
-CURRENT_USER=$(whoami)
-echo "  Running as: $CURRENT_USER"
-if [ "$CURRENT_USER" = "jiffy" ]; then
-  pass "Running as non-root jiffy user"
-else
-  fail "Expected to run as jiffy user, running as $CURRENT_USER"
 fi
 
 # --- Summary ---

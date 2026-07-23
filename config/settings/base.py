@@ -121,6 +121,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.1.0")
 SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
 SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
+SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", "")
 
 # Network allow-list for sandbox containers (hostnames or CIDRs).
 # Containers can only reach hosts matching these entries.

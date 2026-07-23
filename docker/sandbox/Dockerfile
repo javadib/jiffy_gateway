@@ -15,7 +15,7 @@ FROM debian:bookworm-20260713
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Pinned tool versions
-ARG NVM_VERSION=0.40.3
+ARG NVM_VERSION=0.40.6
 ARG GH_VERSION=2.72.0
 ARG GLAB_VERSION=1.52.0
 ARG TEA_VERSION=0.9.0
@@ -47,17 +47,17 @@ RUN printf 'export NVM_DIR="%s"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # --- gvm (Go Version Manager) ---
-ENV GVM_DIR=/usr/local/gvm
-RUN mkdir -p "$GVM_DIR" \
-    && git clone https://github.com/moovweb/gvm.git "$GVM_DIR" \
-    && chmod +x "$GVM_DIR/bin/gvm"
+#ENV GVM_DIR=/usr/local/gvm
+#RUN mkdir -p "$GVM_DIR" \
+#    && git clone https://github.com/moovweb/gvm.git "$GVM_DIR" \
+#    && chmod +x "$GVM_DIR/bin/gvm"
 
 # Make gvm available in non-interactive shells via /etc/profile.d
-RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
-    > /etc/profile.d/gvm.sh
+#RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
+#    > /etc/profile.d/gvm.sh
 
 # Allow jiffy user to write GVM version directories and symlinks
-RUN chown -R root:jiffy "$GVM_DIR" && chmod -R g+w "$GVM_DIR"
+#RUN chown -R root:jiffy "$GVM_DIR" && chmod -R g+w "$GVM_DIR"
 
 # 3. Git provider CLIs — pinned versions
 
@@ -66,12 +66,12 @@ RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_$
     | tar xz --strip-components=2 -C /usr/local/bin "gh_${GH_VERSION}_linux_amd64/bin/gh"
 
 # --- glab (GitLab CLI) ---
-RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" \
-    | tar xz --strip-components=1 -C /usr/local/bin "glab_${GLAB_VERSION}_linux_amd64/bin/glab"
+#RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" \
+#    | tar xz --strip-components=1 -C /usr/local/bin "glab_${GLAB_VERSION}_linux_amd64/bin/glab"
 
 # --- tea (Gitea CLI) ---
-RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea_${TEA_VERSION}_linux_amd64.tar.gz" \
-    | tar xz -C /usr/local/bin "tea"
+#RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea_${TEA_VERSION}_linux_amd64.tar.gz" \
+#    | tar xz -C /usr/local/bin "tea"
 
 # 4. Coding agent CLI: OpenCode
 #    Installed via official install script, pinned to specific version.
@@ -80,26 +80,45 @@ RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/te
 #    OPENCODE_DISABLE_CLAUDE_CODE is intentionally NOT set so the fallback works.
 RUN curl -fsSL https://opencode.ai/install | bash
 
-# 5. Agent wrapper — sets up environment and invokes OpenCode non-interactively
-RUN printf '#!/bin/bash\n\
-# Source version managers for non-interactive shell\n\
-[ -s /etc/profile.d/nvm.sh ] && . /etc/profile.d/nvm.sh\n\
-[ -s /etc/profile.d/gvm.sh ] && . /etc/profile.d/gvm.sh\n\
-\n\
-INSTRUCTIONS_PATH="${JIFFY_INSTRUCTIONS_PATH:-/tmp/jiffy_instructions.txt}"\n\
-if [ ! -f "$INSTRUCTIONS_PATH" ]; then\n\
-  echo "No instructions file at $INSTRUCTIONS_PATH" >&2\n\
-  exit 1\n\
-fi\n\
-\n\
-INSTRUCTIONS=$(cat "$INSTRUCTIONS_PATH")\n\
-opencode run --auto "$INSTRUCTIONS"\n\
-' > /usr/local/bin/jiffy-agent \
-    && chmod +x /usr/local/bin/jiffy-agent
+# Find where opencode was installed and copy to /usr/local/bin
+# Install script adds to PATH in .bashrc, so we source it and use which
+RUN OPENCODE_PATH=$(bash -c 'source /root/.bashrc 2>/dev/null; which opencode' 2>/dev/null || true) \
+    && if [ -z "$OPENCODE_PATH" ]; then \
+         OPENCODE_PATH=$(find /root -name opencode -type f 2>/dev/null | head -1); \
+       fi \
+    && if [ -z "$OPENCODE_PATH" ]; then \
+         OPENCODE_PATH=$(find /usr/local -name opencode -type f 2>/dev/null | head -1); \
+       fi \
+    && if [ -n "$OPENCODE_PATH" ]; then \
+         cp "$OPENCODE_PATH" /usr/local/bin/opencode; \
+         echo "Copied opencode from $OPENCODE_PATH to /usr/local/bin"; \
+       else \
+         echo "ERROR: opencode binary not found after install" >&2; \
+         exit 1; \
+       fi
 
-# 6. Non-root user
+# 5. Non-root user
 RUN useradd -ms /bin/bash jiffy \
     && mkdir -p /workspace && chown jiffy:jiffy /workspace
+
+# Give jiffy a .bashrc and .profile that source version managers
+# .bashrc — for interactive non-login shells (e.g. `docker exec -it ... bash`)
+RUN printf '#!/bin/bash\n\
+# Source version managers for interactive shells\n\
+[ -s /etc/profile.d/nvm.sh ] && . /etc/profile.d/nvm.sh\n\
+export PATH="/usr/local/bin:$PATH"\n\
+' > /home/jiffy/.bashrc \
+    && chmod +x /home/jiffy/.bashrc \
+    && chown jiffy:jiffy /home/jiffy/.bashrc
+
+# .profile — for login shells (e.g. `docker exec ... bash -l`)
+RUN printf '#!/bin/bash\n\
+# Source version managers for login shells\n\
+[ -s /etc/profile.d/nvm.sh ] && . /etc/profile.d/nvm.sh\n\
+export PATH="/usr/local/bin:$PATH"\n\
+' > /home/jiffy/.profile \
+    && chmod +x /home/jiffy/.profile \
+    && chown jiffy:jiffy /home/jiffy/.profile
 
 USER jiffy
 WORKDIR /workspace

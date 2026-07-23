@@ -102,7 +102,9 @@ def read_agent_result(container: Container) -> AgentResult:
     rather than raising — the caller treats any non-"done" status the same way.
     """
     try:
-        exit_code, (output, _) = container.exec_run(f"cat {AGENT_RESULT_PATH}")
+        exit_code, (output, _) = container.exec_run(
+            cmd=["cat", AGENT_RESULT_PATH], demux=True
+        )
         if exit_code != 0:
             return AgentResult(
                 status="failed",
