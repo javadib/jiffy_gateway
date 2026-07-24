@@ -120,6 +120,15 @@ export PATH="/usr/local/bin:$PATH"\n\
     && chmod +x /home/jiffy/.profile \
     && chown jiffy:jiffy /home/jiffy/.profile
 
+# 6. OpenCode config placeholder
+#    Creates a minimal default config at the standard OpenCode global config path.
+#    This file is expected to be overridden at runtime via a volume mount:
+#      docker run -v /host/path/to/opencode.json:/home/jiffy/.config/opencode/opencode.json:ro ...
+#    The placeholder ensures OpenCode works even if no external config is mounted.
+RUN mkdir -p /home/jiffy/.config/opencode \
+    && echo '{}' > /home/jiffy/.config/opencode/opencode.json \
+    && chown -R jiffy:jiffy /home/jiffy/.config
+
 USER jiffy
 WORKDIR /workspace
 

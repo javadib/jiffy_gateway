@@ -166,15 +166,63 @@ def _ensure_network(client: docker.DockerClient) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Config injection
+# ---------------------------------------------------------------------------
+
+SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER = "/home/jiffy/.config/opencode/opencode.json"
+
+
+def _inject_opencode_config(container: Container, task_id: int) -> None:
+    """Read the OpenCode config file and write it into the sandbox container.
+
+    This avoids volume-mount path issues when the Celery worker runs inside
+    Docker (the Docker daemon needs host-accessible paths, but the config
+    file is only accessible inside the Celery container).
+    """
+    opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
+    if not opencode_config:
+        return
+
+    config_path = Path(opencode_config)
+    if not config_path.is_file():
+        logger.warning(
+            "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+            task_id,
+            opencode_config,
+        )
+        return
+
+    try:
+        config_content = config_path.read_text(encoding="utf-8")
+        # Write config into the container using printf + heredoc to avoid escaping issues
+        escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
+        write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
+        exit_code, (_, err) = container.exec_run(
+            cmd=["bash", "-c", write_cmd],
+            demux=True,
+        )
+        if exit_code != 0:
+            logger.warning(
+                "[%d] Failed to inject OpenCode config: %s",
+                task_id,
+                (err or b"").decode(errors="replace"),
+            )
+        else:
+            logger.info("[%d] Injected OpenCode config into sandbox container", task_id)
+    except Exception as e:
+        logger.warning("[%d] Failed to inject OpenCode config: %s", task_id, e)
+
+
+# ---------------------------------------------------------------------------
 # Container lifecycle
 # ---------------------------------------------------------------------------
 
 
 @contextmanager
 def start_generic_sandbox_container(
-    task_id: int,
-    env_vars: Dict[str, Any],
-    repo_url: str = "",
+        task_id: int,
+        env_vars: Dict[str, Any],
+        repo_url: str = "",
 ) -> Generator[Container, None, None]:
     """Start a generic sandbox container for the given task.
 
@@ -197,23 +245,6 @@ def start_generic_sandbox_container(
         if repo_url:
             networking_config = _build_network_config(repo_url)
 
-        # Build volume mounts for host config files
-        volumes = {}
-        opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
-        if opencode_config:
-            config_path = Path(opencode_config)
-            if config_path.is_file():
-                volumes[str(config_path.resolve())] = {
-                    "bind": "/home/jiffy/.config/opencode/config.json",
-                    "mode": "ro",
-                }
-            else:
-                logger.warning(
-                    "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
-                    task_id,
-                    opencode_config,
-                )
-
         container = client.containers.run(
             settings.SANDBOX_IMAGE,
             detach=True,
@@ -223,10 +254,13 @@ def start_generic_sandbox_container(
             cpuset_cpus=str(settings.SANDBOX_CPU_LIMIT),
             environment=env_vars,
             network="jiffy-sandbox-net",
-            volumes=volumes if volumes else None,
             **networking_config,
         )
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
+
+        # Inject OpenCode config into the sandbox container
+        _inject_opencode_config(container, task_id)
+
         yield container
         logger.info("[%d] Container %s finished (id=%s)", task_id, container.short_id, container.id[:12])
     except ContainerError:
@@ -281,7 +315,7 @@ def _redact_url(url: str) -> str:
 
 
 def clone_repo_in_container(
-    container: Container, repo_url: str, token: str, task_id: int = 0
+        container: Container, repo_url: str, token: str, task_id: int = 0
 ) -> None:
     """Clone the repository into the container's workspace directory."""
     logger.info("[%d] Cloning %s into container %s", task_id, _redact_url(repo_url), container.short_id)
@@ -303,8 +337,6 @@ def clone_repo_in_container(
 # Agent execution
 # ---------------------------------------------------------------------------
 
-OPENCODE_CONFIG_PATH = "/home/jiffy/.config/opencode/config.json"
-
 
 def _get_opencode_model(container: Container) -> str:
     """Read the configured LLM model from opencode's config inside the container.
@@ -313,7 +345,7 @@ def _get_opencode_model(container: Container) -> str:
     """
     try:
         exit_code, (output, _) = container.exec_run(
-            cmd=["cat", OPENCODE_CONFIG_PATH], demux=True
+            cmd=["cat", SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER], demux=True
         )
         if exit_code == 0 and output:
             config = json.loads(output)
@@ -333,14 +365,15 @@ def _get_opencode_model(container: Container) -> str:
 
 
 def run_agent_in_container(
-    container: Container,
-    instructions: str,
-    task_id: int = 0,
-    timeout_seconds: int = 3600,
+        container: Container,
+        instructions: str,
+        task_id: int = 0,
+        timeout_seconds: int = 3600,
 ) -> None:
     """Run the coding agent inside the container with the given instructions."""
     model = _get_opencode_model(container)
-    logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id, timeout_seconds, model)
+    logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id,
+                timeout_seconds, model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
