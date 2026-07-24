@@ -8,7 +8,7 @@ from django.test import RequestFactory, TestCase
 from apps.ingestion.views import GiteaIngestView, GitHubIngestView, GitLabIngestView
 from jobs.models import Task
 
-AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"  # Django META prefix + header name
+AUTH_HEADER = "X_JIFFY_TOKEN"  # Django META prefix + header name
 
 
 class TestGitHubIngest(TestCase):

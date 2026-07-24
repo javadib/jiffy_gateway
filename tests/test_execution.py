@@ -200,6 +200,7 @@ class ExecuteTaskTest(TestCase):
             "programming_language": "python",
             "summary": "Fixed the thing.",
             "error_message": None,
+            "model": None,
         }
         result.update(overrides)
         return result
@@ -253,6 +254,7 @@ class ExecuteTaskTest(TestCase):
             programming_language="python",
             summary=None,
             error_message="Agent failed.",
+            model=None,
         )
 
         from jobs.tasks import execute_task
@@ -614,6 +616,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "programming_language": "python",
             "summary": "Fixed.",
             "error_message": None,
+            "model": None,
         })
 
         from jobs.tasks import execute_task
@@ -669,6 +672,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "programming_language": None,
             "summary": "Done.",
             "error_message": None,
+            "model": None,
         })
 
         from jobs.tasks import execute_task
@@ -732,6 +736,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "programming_language": None,
             "summary": "Done.",
             "error_message": None,
+            "model": None,
         })
 
         from jobs.tasks import execute_task
@@ -769,6 +774,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "programming_language": None,
             "summary": None,
             "error_message": "Something went wrong",
+            "model": None,
         })
 
         from jobs.tasks import execute_task
@@ -805,6 +811,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "programming_language": None,
             "summary": "Done.",
             "error_message": None,
+            "model": None,
         })
 
         from jobs.tasks import execute_task

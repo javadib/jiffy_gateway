@@ -10,7 +10,7 @@ def _make_request(token: str = None) -> MagicMock:
     """Build a mock request with an optional X_JIFFY_TOKEN header."""
     request = MagicMock()
     if token is not None:
-        request.META = {"HTTP_X_JIFFY_TOKEN": token}
+        request.META = {"X_JIFFY_TOKEN": token}
     else:
         request.META = {}
     return request
