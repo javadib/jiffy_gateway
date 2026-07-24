@@ -1,4 +1,5 @@
 """Manages the lifecycle of a Docker container for a task."""
+import json
 import logging
 import os
 import time
@@ -165,15 +166,63 @@ def _ensure_network(client: docker.DockerClient) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Config injection
+# ---------------------------------------------------------------------------
+
+SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER = "/home/jiffy/.config/opencode/opencode.json"
+
+
+def _inject_opencode_config(container: Container, task_id: int) -> None:
+    """Read the OpenCode config file and write it into the sandbox container.
+
+    This avoids volume-mount path issues when the Celery worker runs inside
+    Docker (the Docker daemon needs host-accessible paths, but the config
+    file is only accessible inside the Celery container).
+    """
+    opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
+    if not opencode_config:
+        return
+
+    config_path = Path(opencode_config)
+    if not config_path.is_file():
+        logger.warning(
+            "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+            task_id,
+            opencode_config,
+        )
+        return
+
+    try:
+        config_content = config_path.read_text(encoding="utf-8")
+        # Write config into the container using printf + heredoc to avoid escaping issues
+        escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
+        write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
+        exit_code, (_, err) = container.exec_run(
+            cmd=["bash", "-c", write_cmd],
+            demux=True,
+        )
+        if exit_code != 0:
+            logger.warning(
+                "[%d] Failed to inject OpenCode config: %s",
+                task_id,
+                (err or b"").decode(errors="replace"),
+            )
+        else:
+            logger.info("[%d] Injected OpenCode config into sandbox container", task_id)
+    except Exception as e:
+        logger.warning("[%d] Failed to inject OpenCode config: %s", task_id, e)
+
+
+# ---------------------------------------------------------------------------
 # Container lifecycle
 # ---------------------------------------------------------------------------
 
 
 @contextmanager
 def start_generic_sandbox_container(
-    task_id: int,
-    env_vars: Dict[str, Any],
-    repo_url: str = "",
+        task_id: int,
+        env_vars: Dict[str, Any],
+        repo_url: str = "",
 ) -> Generator[Container, None, None]:
     """Start a generic sandbox container for the given task.
 
@@ -208,6 +257,10 @@ def start_generic_sandbox_container(
             **networking_config,
         )
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
+
+        # Inject OpenCode config into the sandbox container
+        _inject_opencode_config(container, task_id)
+
         yield container
         logger.info("[%d] Container %s finished (id=%s)", task_id, container.short_id, container.id[:12])
     except ContainerError:
@@ -262,7 +315,7 @@ def _redact_url(url: str) -> str:
 
 
 def clone_repo_in_container(
-    container: Container, repo_url: str, token: str, task_id: int = 0
+        container: Container, repo_url: str, token: str, task_id: int = 0
 ) -> None:
     """Clone the repository into the container's workspace directory."""
     logger.info("[%d] Cloning %s into container %s", task_id, _redact_url(repo_url), container.short_id)
@@ -285,14 +338,42 @@ def clone_repo_in_container(
 # ---------------------------------------------------------------------------
 
 
+def _get_opencode_model(container: Container) -> str:
+    """Read the configured LLM model from opencode's config inside the container.
+
+    Returns the model name or "unknown" if not found.
+    """
+    try:
+        exit_code, (output, _) = container.exec_run(
+            cmd=["cat", SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER], demux=True
+        )
+        if exit_code == 0 and output:
+            config = json.loads(output)
+            # opencode config has provider.model format like "anthropic/claude-sonnet-4-20250514"
+            model = config.get("model")
+            if model:
+                return model
+            # Check nested provider config
+            provider = config.get("provider", {})
+            if isinstance(provider, dict):
+                model = provider.get("model")
+                if model:
+                    return model
+    except (json.JSONDecodeError, Exception):
+        pass
+    return "unknown"
+
+
 def run_agent_in_container(
-    container: Container,
-    instructions: str,
-    task_id: int = 0,
-    timeout_seconds: int = 3600,
+        container: Container,
+        instructions: str,
+        task_id: int = 0,
+        timeout_seconds: int = 3600,
 ) -> None:
     """Run the coding agent inside the container with the given instructions."""
-    logger.info("[%d] Running agent in container %s (timeout=%ds)", task_id, container.short_id, timeout_seconds)
+    model = _get_opencode_model(container)
+    logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id,
+                timeout_seconds, model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
@@ -305,8 +386,14 @@ def run_agent_in_container(
             f"Failed to write instructions file: {(err or b'').decode(errors='replace')}"
         )
 
+    # Read instructions from file and pass to opencode
+    # Use login shell (-l) so .profile is sourced and all tools (nvm, uv, etc.) are available
+    run_cmd = (
+        'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
+        'opencode run --auto "$INSTRUCTIONS"'
+    )
     exit_code, (output, err) = container.exec_run(
-        cmd=["coding-agent-cli"],
+        cmd=["bash", "-l", "-c", run_cmd],
         demux=True,
         workdir=WORKSPACE,
     )

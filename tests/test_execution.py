@@ -484,7 +484,7 @@ class GetDockerClientTest(TestCase):
 # ---------------------------------------------------------------------------
 
 
-@override_settings(SANDBOX_IMAGE="jiffy-sandbox:1.0.0")
+@override_settings(SANDBOX_IMAGE="jiffy-sandbox:1.1.0")
 class EnsureSandboxImageTest(TestCase):
     """Tests for the sandbox image auto-build logic."""
 
@@ -497,7 +497,7 @@ class EnsureSandboxImageTest(TestCase):
 
         ensure_sandbox_image()
 
-        mock_client.images.get.assert_called_once_with("jiffy-sandbox:1.0.0")
+        mock_client.images.get.assert_called_once_with("jiffy-sandbox:1.1.0")
         mock_client.images.build.assert_not_called()
 
     @patch("jobs.execution.container.get_docker_client")
@@ -515,7 +515,7 @@ class EnsureSandboxImageTest(TestCase):
         mock_client.images.get.assert_called_once()
         mock_client.images.build.assert_called_once()
         build_kwargs = mock_client.images.build.call_args
-        self.assertEqual(build_kwargs[1]["tag"], "jiffy-sandbox:1.0.0")
+        self.assertEqual(build_kwargs[1]["tag"], "jiffy-sandbox:1.1.0")
 
     @patch("jobs.execution.container.get_docker_client")
     def test_build_failure_raises_container_error(self, mock_get_client):

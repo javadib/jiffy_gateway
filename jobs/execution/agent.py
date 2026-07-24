@@ -19,6 +19,7 @@ class AgentResult(NamedTuple):
     programming_language: str | None
     summary: str | None
     error_message: str | None
+    model: str | None
 
 
 def build_agent_instructions(payload: Dict[str, Any]) -> str:
@@ -102,7 +103,9 @@ def read_agent_result(container: Container) -> AgentResult:
     rather than raising — the caller treats any non-"done" status the same way.
     """
     try:
-        exit_code, (output, _) = container.exec_run(f"cat {AGENT_RESULT_PATH}")
+        exit_code, (output, _) = container.exec_run(
+            cmd=["cat", AGENT_RESULT_PATH], demux=True
+        )
         if exit_code != 0:
             return AgentResult(
                 status="failed",
@@ -115,6 +118,7 @@ def read_agent_result(container: Container) -> AgentResult:
                     f"(exit code {exit_code}). The agent did not produce the "
                     "required output contract."
                 ),
+                model=None,
             )
 
         result_data = json.loads(output)
@@ -130,6 +134,7 @@ def read_agent_result(container: Container) -> AgentResult:
                     result_data.get("error_message")
                     or "Agent result JSON is missing a valid 'status' field (must be 'done' or 'failed')."
                 ),
+                model=result_data.get("model"),
             )
         return AgentResult(
             status=status,
@@ -138,6 +143,7 @@ def read_agent_result(container: Container) -> AgentResult:
             programming_language=result_data.get("programming_language"),
             summary=result_data.get("summary"),
             error_message=result_data.get("error_message"),
+            model=result_data.get("model"),
         )
     except json.JSONDecodeError as e:
         return AgentResult(
@@ -147,6 +153,7 @@ def read_agent_result(container: Container) -> AgentResult:
             programming_language=None,
             summary=None,
             error_message=f"Agent result file is not valid JSON: {e}",
+            model=None,
         )
     except Exception as e:
         logger.exception(
@@ -160,4 +167,5 @@ def read_agent_result(container: Container) -> AgentResult:
             programming_language=None,
             summary=None,
             error_message=f"Failed to read agent result: {e}",
+            model=None,
         )

@@ -115,6 +115,7 @@ def execute_task(self, task_id: int) -> None:
 
     repo_url = payload["repo"]["url"]
     repo_token = payload["repo"]["token"]
+    callback = payload["callback"]
     issue_id = payload.get("issue", {}).get("external_issue_id", "?")
     _task_log(
         task_id,
@@ -164,7 +165,8 @@ def execute_task(self, task_id: int) -> None:
             _task_log(
                 task_id,
                 logging.INFO,
-                "Agent result: done — branch=%s pr=%s lang=%s",
+                "Agent result: done — model=%s branch=%s pr=%s lang=%s",
+                result.model or "(unknown)",
                 result.branch_name or "(none)",
                 result.pr_url or "(none)",
                 result.programming_language or "(none)",
@@ -174,7 +176,8 @@ def execute_task(self, task_id: int) -> None:
             _task_log(
                 task_id,
                 logging.WARNING,
-                "Agent result: failed — error=%s",
+                "Agent result: failed — model=%s error=%s",
+                result.model or "(unknown)",
                 result.error_message or "(no details)",
                 provider=task.provider,
             )
@@ -193,6 +196,7 @@ def execute_task(self, task_id: int) -> None:
             status="done",
             summary=result.summary,
             pr_url=result.pr_url,
+            model=result.model,
         )
         _update_status(task, "done")
 
