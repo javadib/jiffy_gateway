@@ -11,16 +11,31 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import tomllib
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+#todo: maybe pass form env (docker, kuber)
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-dev-only-key")
 DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 _allowed_hosts_raw = os.environ.get("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_raw.split(",") if h.strip()] if _allowed_hosts_raw else ["localhost", "127.0.0.1"]
 
+
+__version__ = "1.4.1"
+
+try:
+    with open(BASE_DIR / "pyproject.toml", "rb") as f:
+        _pyproject = tomllib.load(f)
+        __version__ = _pyproject["project"]["version"]
+except (FileNotFoundError, KeyError, tomllib.TOMLDecodeError):
+    pass
 
 # Application definition
 
@@ -102,6 +117,32 @@ CELERY_TASK_ROUTES = {
 # Redis
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 
+# Sandbox container settings
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.1.0")
+SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
+SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
+SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", "")
+
+# Network allow-list for sandbox containers (hostnames or CIDRs).
+# Containers can only reach hosts matching these entries.
+# At minimum, include the package registries for Python/Node/Go plus the
+# git remote host for each provider in use.
+_default_network_allowlist = ",".join([
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "github.com",
+    "gitlab.com",
+    "gitea.com",
+])
+SANDBOX_NETWORK_ALLOWLIST = [
+    h.strip()
+    for h in os.environ.get("SANDBOX_NETWORK_ALLOWLIST", _default_network_allowlist).split(",")
+    if h.strip()
+]
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -140,6 +181,51 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Logging
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} {name}: {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "jobs.tasks": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "jobs.execution": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.ingestion": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "config.celery": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
+
+
 # Django REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -149,6 +235,16 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Jiffy API Gateway',
     'DESCRIPTION': 'Central server for Jiffy: receives task requests, runs an LLM coding agent, and reports back.',
-    'VERSION': '1.0.0',
+    'VERSION': __version__,
     'SERVE_INCLUDE_SCHEMA': False,
+    'SECURITY': [{'X_JIFFY_TOKEN': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'X_JIFFY_TOKEN': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X_JIFFY_TOKEN',
+            },
+        },
+    },
 }

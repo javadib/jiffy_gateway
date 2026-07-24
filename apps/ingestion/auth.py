@@ -1,82 +1,50 @@
-"""Per-provider webhook authentication verification."""
+"""Ingestion authentication — header-based token verification."""
 
-import hashlib
 import hmac
 import os
 
-
-def verify_github_signature(raw_body: bytes, signature_header: str) -> bool:
-    """Verify GitHub webhook signature.
-
-    GitHub sends the signature in the X-Hub-Signature-256 header as
-    sha256=<hex_digest>, computed as HMAC-SHA256(secret, raw_body).
-
-    Args:
-        raw_body: The raw request body bytes.
-        signature_header: The value of the X-Hub-Signature-256 header.
-
-    Returns:
-        True if the signature is valid, False otherwise.
-    """
-    secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
-    if not secret:
-        return False
-
-    if not signature_header or not signature_header.startswith("sha256="):
-        return False
-
-    expected_digest = hmac.new(
-        secret.encode("utf-8"), raw_body, hashlib.sha256
-    ).hexdigest()
-    expected_signature = f"sha256={expected_digest}"
-
-    return hmac.compare_digest(expected_signature, signature_header)
+AUTH_HEADER = "X_JIFFY_TOKEN"
 
 
-def verify_gitlab_token(token_header: str) -> bool:
-    """Verify GitLab webhook shared token.
+def verify_ingest_token(request, expected_secret: str) -> bool:
+    """Verify the ``X_JIFFY_TOKEN`` header against an expected secret.
 
-    GitLab sends a plain shared token in the X-Gitlab-Token header.
-    No HMAC — just a constant-time string comparison.
+    A single, uniform header for all providers — Jiffy's own edge
+    components call Jiffy's own endpoints, so there is no need to
+    preserve each provider's native webhook-signing convention.
 
     Args:
-        token_header: The value of the X-Gitlab-Token header.
+        request: The Django request object.
+        expected_secret: The provider-specific secret to compare against.
 
     Returns:
         True if the token matches, False otherwise.
     """
-    secret = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
-    if not secret:
+    if not expected_secret:
         return False
 
-    if not token_header:
+    token = request.META.get(AUTH_HEADER, "")
+    if not token:
         return False
 
-    return hmac.compare_digest(secret, token_header)
+    return hmac.compare_digest(expected_secret, token)
 
 
-def verify_gitea_signature(raw_body: bytes, signature_header: str) -> bool:
-    """Verify Gitea webhook signature.
+def get_ingest_secret(provider: str) -> str:
+    """Return the configured ingest token for *provider*.
 
-    Gitea sends the signature in the X-Gitea-Signature header as a
-    hex HMAC-SHA256 digest of the raw body (no sha256= prefix).
+    Each provider has its own independently configured secret via its own
+    env var — they are never shared across providers.
 
     Args:
-        raw_body: The raw request body bytes.
-        signature_header: The value of the X-Gitea-Signature header.
+        provider: One of ``"github"``, ``"gitlab"``, ``"gitea"``.
 
     Returns:
-        True if the signature is valid, False otherwise.
+        The secret string, or empty string if not configured.
     """
-    secret = os.environ.get("GITEA_WEBHOOK_SECRET", "")
-    if not secret:
-        return False
-
-    if not signature_header:
-        return False
-
-    expected_digest = hmac.new(
-        secret.encode("utf-8"), raw_body, hashlib.sha256
-    ).hexdigest()
-
-    return hmac.compare_digest(expected_digest, signature_header)
+    env_map = {
+        "github": "GITHUB_INGEST_TOKEN",
+        "gitlab": "GITLAB_INGEST_TOKEN",
+        "gitea": "GITEA_INGEST_TOKEN",
+    }
+    return os.environ.get(env_map.get(provider, ""), "")

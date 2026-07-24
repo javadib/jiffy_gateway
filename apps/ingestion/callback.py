@@ -19,11 +19,12 @@ RETRY_DELAY_SECONDS = 2
 
 
 def send_callback(
-    task: "Task",
-    status: str,
-    summary: str | None = None,
-    pr_url: str | None = None,
-    error_message: str | None = None,
+        task: "Task",
+        status: str,
+        summary: str | None = None,
+        pr_url: str | None = None,
+        error_message: str | None = None,
+        model: str | None = None,
 ) -> None:
     """Send a signed callback to task.callback_url.
 
@@ -36,6 +37,7 @@ def send_callback(
         summary: Optional summary of the result.
         pr_url: Optional PR/MR URL if one was opened.
         error_message: Optional error message if the task failed.
+        model: Optional LLM model used for the task.
     """
     payload: dict = {"task_id": task.id, "status": status}
     if summary is not None:
@@ -44,6 +46,8 @@ def send_callback(
         payload["pr_url"] = pr_url
     if error_message is not None:
         payload["error_message"] = error_message
+    if model is not None:
+        payload["model"] = model
 
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
@@ -54,6 +58,8 @@ def send_callback(
     headers = {
         "Content-Type": "application/json",
         "X-Jiffy-Signature": signature,
+        "X-GitHub-Api-Version": "2026-03-10",
+        "Authorization": "Bearer " + task.callback_secret,
     }
 
     for attempt in range(1, MAX_RETRIES + 1):

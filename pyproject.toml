@@ -12,6 +12,9 @@ dependencies = [
     "celery>=5.4",
     "redis>=5.0",
     "requests>=2.34.2",
+    "python-dotenv>=1.0",
+    "djangorestframework-stubs>=3.17.0",
+    "docker>=7.0",
 ]
 
 

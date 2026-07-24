@@ -1,27 +1,234 @@
 """Celery tasks for job execution."""
 
 import logging
+import time
+from typing import Any
 
 from celery import shared_task
+
+from apps.ingestion.callback import send_callback
+from jobs.execution.agent import (
+    build_agent_instructions,
+    read_agent_result,
+)
+from jobs.execution.container import (
+    clone_repo_in_container,
+    ensure_sandbox_image,
+    run_agent_in_container,
+    start_generic_sandbox_container,
+)
+from jobs.execution.exceptions import ExecutionError
+from jobs.models import Task
+from jobs.utils.redis import load_payload_from_redis
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True, queue="execute", autoretry_for=(Exception,))
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _task_log(
+    task_id: int,
+    level: int,
+    msg: str,
+    *args: Any,
+    provider: str = "",
+    **kwargs: Any,
+) -> None:
+    """Log a message prefixed with ``[task_id]`` (and optionally provider) for easy grep."""
+    prefix = f"[{task_id}]"
+    if provider:
+        prefix = f"[{task_id}|{provider}]"
+    logger.log(level, f"{prefix} {msg}", *args, **kwargs)
+
+
+def _update_status(task: Task, status: str) -> None:
+    """Update the task status in its own short write transaction."""
+    task.status = status
+    task.save(update_fields=["status", "updated_at"])
+
+
+def _fail_task(task: Task, error_message: str) -> None:
+    """Mark a task as failed and send the callback."""
+    task.status = "failed"
+    task.error_message = error_message
+    task.save(update_fields=["status", "error_message", "updated_at"])
+    _task_log(task.id, logging.ERROR, "Task failed: %s", error_message, provider=task.provider)
+    send_callback(task, status="failed", error_message=task.error_message)
+
+
+def _redact_payload_for_log(payload: dict) -> dict:
+    """Return a shallow copy of the payload with secrets masked for logging."""
+    redacted = dict(payload)
+    repo = dict(redacted.get("repo", {}))
+    repo["token"] = "***"
+    redacted["repo"] = repo
+    callback = dict(redacted.get("callback", {}))
+    callback["secret"] = "***"
+    redacted["callback"] = callback
+    return redacted
+
+
+# ---------------------------------------------------------------------------
+# Main task
+# ---------------------------------------------------------------------------
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+    queue="execute",
+)
 def execute_task(self, task_id: int) -> None:
-    """Execute a coding task in an isolated container.
+    """Execute a coding task in an isolated sandbox container.
 
-    This is a stub — the full pipeline (LLM extraction, container
-    execution, commit/push, PR creation) will be implemented later.
+    Sequence:
+      0. Load task + payload, log start
+      1. Ensure sandbox image exists (build if missing)
+      2. Provision the generic sandbox container
+      3. Clone the repo into it
+      4. Hand off to the agent with instructions
+      5. Read the agent's structured result
+      6. Report via callback
     """
-    from jobs.models import Task
+    start_time = time.monotonic()
 
-    logger.info("execute_task called for task_id=%d", task_id)
-    # TODO: implement full pipeline
-    # For now, just mark as done
+    # --- Load task and payload ------------------------------------------------
     try:
         task = Task.objects.get(id=task_id)
-        task.status = "done"
-        task.save(update_fields=["status", "updated_at"])
     except Task.DoesNotExist:
-        logger.error("Task %d not found", task_id)
+        logger.error("[task_id=%d] Task not found in DB — skipping", task_id)
+        return
+
+    _task_log(task_id, logging.INFO, "Task started", provider=task.provider)
+
+    try:
+        payload = load_payload_from_redis(task_id)
+    except ValueError as e:
+        _task_log(task_id, logging.ERROR, "Failed to load payload: %s", e, provider=task.provider)
+        _fail_task(task, str(e))
+        return
+
+    repo_url = payload["repo"]["url"]
+    repo_token = payload["repo"]["token"]
+    callback = payload["callback"]
+    issue_id = payload.get("issue", {}).get("external_issue_id", "?")
+    _task_log(
+        task_id,
+        logging.INFO,
+        "Payload loaded — repo=%s issue=%s",
+        repo_url,
+        issue_id,
+        provider=task.provider,
+    )
+
+    # --- Ensure sandbox image exists -----------------------------------------
+    try:
+        _task_log(task_id, logging.INFO, "Checking sandbox image...", provider=task.provider)
+        ensure_sandbox_image()
+    except ExecutionError as e:
+        _task_log(task_id, logging.ERROR, "Sandbox image check/build failed: %s", e, provider=task.provider)
+        _fail_task(task, str(e))
+        return
+
+    # --- Provision → Clone → Run → Report ------------------------------------
+    try:
+        _update_status(task, "provisioning")
+        _task_log(task_id, logging.INFO, "Status → provisioning", provider=task.provider)
+
+        env_vars = {"REPO_TOKEN": repo_token}
+
+        with start_generic_sandbox_container(task.id, env_vars, repo_url=repo_url) as container:
+            # Cloning
+            _update_status(task, "cloning")
+            _task_log(task_id, logging.INFO, "Status → cloning", provider=task.provider)
+            clone_repo_in_container(container, repo_url, repo_token, task_id=task_id)
+
+            # Running — agent does everything from here
+            _update_status(task, "running")
+            _task_log(task_id, logging.INFO, "Status → running — handing off to agent", provider=task.provider)
+            instructions = build_agent_instructions(payload)
+            run_agent_in_container(container, instructions, task_id=task_id)
+
+            # Read result
+            result = read_agent_result(container)
+
+        # Reporting
+        _update_status(task, "reporting")
+        _task_log(task_id, logging.INFO, "Status → reporting", provider=task.provider)
+
+        if result.status == "done":
+            _task_log(
+                task_id,
+                logging.INFO,
+                "Agent result: done — model=%s branch=%s pr=%s lang=%s",
+                result.model or "(unknown)",
+                result.branch_name or "(none)",
+                result.pr_url or "(none)",
+                result.programming_language or "(none)",
+                provider=task.provider,
+            )
+        else:
+            _task_log(
+                task_id,
+                logging.WARNING,
+                "Agent result: failed — model=%s error=%s",
+                result.model or "(unknown)",
+                result.error_message or "(no details)",
+                provider=task.provider,
+            )
+
+        if result.status != "done":
+            _fail_task(task, error_message=result.error_message or "Agent reported failure without details.")
+            return
+
+        task.branch_name = result.branch_name
+        task.programming_language = result.programming_language
+        task.pr_url = result.pr_url
+        task.save(update_fields=["branch_name", "programming_language", "pr_url"])
+
+        send_callback(
+            task,
+            status="done",
+            summary=result.summary,
+            pr_url=result.pr_url,
+            model=result.model,
+        )
+        _update_status(task, "done")
+
+        elapsed = time.monotonic() - start_time
+        _task_log(
+            task_id,
+            logging.INFO,
+            "Task completed successfully in %.1fs",
+            elapsed,
+            provider=task.provider,
+        )
+
+    except ExecutionError as e:
+        elapsed = time.monotonic() - start_time
+        _task_log(
+            task_id,
+            logging.ERROR,
+            "Execution failed after %.1fs: %s",
+            elapsed,
+            e,
+            provider=task.provider,
+        )
+        _fail_task(task, str(e))
+    except Exception as e:
+        elapsed = time.monotonic() - start_time
+        _task_log(
+            task_id,
+            logging.ERROR,
+            "Unexpected error after %.1fs: %s",
+            elapsed,
+            e,
+            provider=task.provider,
+        )
+        _fail_task(task, "An unexpected internal error occurred.")
+        raise self.retry(exc=e)

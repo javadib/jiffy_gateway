@@ -14,6 +14,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - jiffy-internal
     deploy:
       resources:
         limits:
@@ -34,13 +36,31 @@ services:
       dockerfile: Dockerfile
       target: runner
     command: celery -A config worker -Q execute --concurrency=3 -l info -n execute@%h
+    user: root
     volumes:
       - .:/app
+      - ./docker/sandbox/opencode.json:/app/opencode.json
     env_file:
       - .env
+    environment:
+      # Point the Docker SDK at the socket proxy instead of a host-mounted socket.
+      # The proxy is the ONLY service that mounts the real /var/run/docker.sock.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # Override Redis URLs from .env — 127.0.0.1 inside a container is the
+      # container itself, not the host.  Use the Docker DNS name "redis" instead.
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # OpenCode config — the project root is mounted at /app, so the config
+      # file (opencode.json) is at /app/opencode.json inside this container.
+      SANDBOX_OPENCODE_CONFIG_PATH: /app/opencode.json
     depends_on:
       redis:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    networks:
+      - jiffy-internal
     deploy:
       resources:
         limits:
@@ -49,6 +69,67 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Docker Socket Proxy
+  # ---------------------------------------------------------------------------
+  # Proxies a restricted subset of the Docker Engine API so the Celery worker
+  # can manage sandbox containers without having raw host-Docker-root access.
+  #
+  # Enabled endpoint groups (and why):
+  #   CONTAINERS — container create/start/stop/remove (sandbox lifecycle)
+  #   IMAGES     — image inspect/get (check if sandbox image exists)
+  #   BUILD      — image build from Dockerfile (build sandbox image if missing)
+  #   NETWORKS   — network inspect/create (jiffy-sandbox-net for sandbox containers)
+  #   EXEC       — exec into running containers (clone repo, run agent)
+  #   POST       — global toggle for write operations (required by all of the above)
+  #
+  # Everything else is disabled (defaults to 0).  The proxy is NOT exposed on
+  # any host port — it is only reachable from services on jiffy-internal.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      # Container lifecycle (create, start, stop, remove, inspect, list)
+      CONTAINERS: 1
+      # Image inspect/get (check sandbox image existence)
+      IMAGES: 1
+      # Build images from Dockerfile (sandbox image build)
+      BUILD: 1
+      # Network inspect/create (jiffy-sandbox-net)
+      NETWORKS: 1
+      # Exec into running containers (clone, agent run)
+      EXEC: 1
+      # Global POST toggle — required for all write operations above
+      POST: 1
+      # --- Everything below is intentionally disabled ---
+      VOLUMES: 0
+      SERVICES: 0
+      TASKS: 0
+      SYSTEM: 0
+      PLUGINS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      NODES: 0
+      SWARM: 0
+    volumes:
+      # Only the proxy mounts the real host socket, read-only
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - jiffy-internal
+    # No ports exposed to the host — internal network only
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+        reservations:
+          cpus: "0.05"
+          memory: 32m
     logging:
       driver: json-file
       options:
@@ -64,6 +145,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - jiffy-internal
     deploy:
       resources:
         limits:
@@ -77,3 +160,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  jiffy-internal:
+    driver: bridge
+    internal: false  # containers need outbound access for git clone, pip, npm, etc.

@@ -12,7 +12,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.ingestion.auth import verify_gitea_signature, verify_github_signature, verify_gitlab_token
+from apps.ingestion.auth import get_ingest_secret, verify_ingest_token
 from apps.ingestion.serializers import IngestionPayloadSerializer
 from apps.ingestion.tasks import execute_task
 from jobs.models import Task
@@ -56,12 +56,12 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     validated = serializer.validated_data
-    lock_key = f"jiffy:lock:issue:{provider}:{validated['issue_external_id']}"
+    lock_key = f"jiffy:lock:issue:{provider}:{validated['issue']['external_issue_id']}"
     if not _acquire_lock(lock_key):
         logger.info(
             "Duplicate delivery for %s issue %s — skipping",
             provider,
-            validated["issue_external_id"],
+            validated["issue"]["external_issue_id"],
         )
         return Response({"status": "already_queued"}, status=status.HTTP_202_ACCEPTED)
 
@@ -70,10 +70,10 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
     with transaction.atomic():
         task = Task.objects.create(
             provider=provider,
-            repo_url=validated["repo_url"],
-            issue_external_id=validated["issue_external_id"],
-            callback_url=validated["callback_url"],
-            callback_secret=validated["callback_secret"],
+            repo_url=validated["repo"]["url"],
+            issue_external_id=validated["issue"]["external_issue_id"],
+            callback_url=validated["callback"]["url"],
+            callback_secret=validated["callback"]["secret"],
             status="queued",
             celery_task_id=task_id,
         )
@@ -85,7 +85,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
     logger.info(
         "Ingested %s issue %s as task %d (celery=%s)",
         provider,
-        validated["issue_external_id"],
+        validated["issue"]["external_issue_id"],
         task.id,
         task_id,
     )
@@ -96,7 +96,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
 class GitHubIngestView(APIView):
     """Ingest webhook from GitHub.
 
-    Auth: X-Hub-Signature-256 header with HMAC-SHA256(secret, body).
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []
@@ -104,12 +104,11 @@ class GitHubIngestView(APIView):
     serializer_class = IngestionPayloadSerializer
 
     def post(self, request: Request) -> Response:
-        raw_body = request.body
-        signature = request.headers.get("X-Hub-Signature-256", "")
-        if not verify_github_signature(raw_body, signature):
-            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+        secret = get_ingest_secret("github")
+        if not verify_ingest_token(request, secret):
+            return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         try:
-            data = json.loads(raw_body)
+            data = json.loads(request.body)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return Response({"error": "Invalid JSON"}, status=status.HTTP_400_BAD_REQUEST)
         return _handle_ingestion("github", data)
@@ -118,7 +117,7 @@ class GitHubIngestView(APIView):
 class GitLabIngestView(APIView):
     """Ingest webhook from GitLab.
 
-    Auth: X-Gitlab-Token header with shared token.
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []
@@ -126,8 +125,7 @@ class GitLabIngestView(APIView):
     serializer_class = IngestionPayloadSerializer
 
     def post(self, request: Request) -> Response:
-        token = request.headers.get("X-Gitlab-Token", "")
-        if not verify_gitlab_token(token):
+        if not verify_ingest_token(request, get_ingest_secret("gitlab")):
             return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         try:
             data = json.loads(request.body)
@@ -139,7 +137,7 @@ class GitLabIngestView(APIView):
 class GiteaIngestView(APIView):
     """Ingest webhook from Gitea.
 
-    Auth: X-Gitea-Signature header with HMAC-SHA256(secret, body).
+    Auth: ``X_JIFFY_TOKEN`` header.
     """
 
     authentication_classes = []
@@ -147,12 +145,10 @@ class GiteaIngestView(APIView):
     serializer_class = IngestionPayloadSerializer
 
     def post(self, request: Request) -> Response:
-        raw_body = request.body
-        signature = request.headers.get("X-Gitea-Signature", "")
-        if not verify_gitea_signature(raw_body, signature):
-            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not verify_ingest_token(request, get_ingest_secret("gitea")):
+            return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
         try:
-            data = json.loads(raw_body)
+            data = json.loads(request.body)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return Response({"error": "Invalid JSON"}, status=status.HTTP_400_BAD_REQUEST)
         return _handle_ingestion("gitea", data)

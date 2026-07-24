@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
                 ('provider', models.CharField(max_length=20)),
                 ('repo_url', models.CharField(max_length=500)),
                 ('programming_language', models.CharField(blank=True, max_length=50, null=True)),
-                ('issue_external_id', models.CharField(max_length=100)),
+                ('external_issue_id', models.CharField(max_length=100)),
                 ('title', models.CharField(blank=True, max_length=255, null=True)),
                 ('branch_base', models.CharField(blank=True, max_length=255, null=True)),
                 ('branch_name', models.CharField(blank=True, max_length=255, null=True)),

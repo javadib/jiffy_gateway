@@ -1,17 +1,3 @@
-FROM python:3.12-slim AS builder
-
-WORKDIR /app
-
-ARG APP_VERSION=dev
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv && \
-    uv sync --frozen --no-dev --no-install-project
-
 FROM python:3.12-slim AS runner
 
 ARG APP_VERSION=dev
@@ -22,8 +8,10 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY --from=builder /app/.venv /app/.venv
-ENV PATH="/app/.venv/bin:$PATH"
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv && \
+    uv export --frozen --no-dev --no-hashes -o requirements.txt && \
+    uv pip install --system -r requirements.txt
 
 RUN addgroup --system app && adduser --system --ingroup app app
 

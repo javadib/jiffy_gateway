@@ -3,3 +3,6 @@
 /.mimocode/
 /.idea/
 __pycache__/
+.env
+/docker/sandbox/opencode.jsonc
+/docker/sandbox/opencode.json
