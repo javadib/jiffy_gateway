@@ -58,7 +58,7 @@ Issue mention ──▶ Edge check (Action) ──▶ gateway ──▶ Queue �
 ### Quick Start
 
 ```bash
-git clone https://github.com/<your-org>/jiffy.git
+git clone https://github.com/javadib/jiffy_gateway.git
 cd jiffy
 cp .env.example .env       # fill in git provider tokens, Redis URL, agent/LLM credentials
 docker compose up -d
@@ -90,7 +90,7 @@ Detailed configuration options (mention tag, timeouts, resource limits, allowed 
 - [ ] Slack channel support
 - [ ] Web dashboard for task history and status (beyond Django Admin)
 
-Have an idea? Open an Issue with the `enhancement` label — or better yet, mention the bot and let Jiffy build it. 😉
+Have an idea? Open an Issue with the `enhancement` label — or better yet, mention the bot and let Jiffy build it.
 
 ## Contributing
 
