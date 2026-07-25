@@ -137,17 +137,8 @@ def _extract_git_host(repo_url: str) -> str | None:
 
 
 def _build_network_config(repo_url: str) -> dict:
-    """Build Docker network configuration with an allow-list."""
-    host = _extract_git_host(repo_url)
-    allowlist: list[str] = list(settings.SANDBOX_NETWORK_ALLOWLIST)
-    if host and host not in allowlist:
-        allowlist.append(host)
-
-    extra_hosts = {h: h for h in allowlist if "/" not in h}
-
-    return {
-        "extra_hosts": extra_hosts,
-    }
+    """Build Docker network configuration for the sandbox container."""
+    return {}
 
 
 def _ensure_network(client: docker.DockerClient) -> str:
@@ -179,16 +170,13 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
     Docker (the Docker daemon needs host-accessible paths, but the config
     file is only accessible inside the Celery container).
     """
-    opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
-    if not opencode_config:
-        return
-
-    config_path = Path(opencode_config)
+    # Read opencode.json from the project root
+    config_path = Path(__file__).resolve().parent.parent.parent / "opencode.json"
     if not config_path.is_file():
         logger.warning(
-            "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+            "[%d] opencode.json not found in project root: %s",
             task_id,
-            opencode_config,
+            config_path,
         )
         return
 
@@ -197,6 +185,9 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
         # Write config into the container using printf + heredoc to avoid escaping issues
         escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
         write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
+
+        logger.info(f"[%d] OpenCode config: %s", task_id, write_cmd)
+
         exit_code, (_, err) = container.exec_run(
             cmd=["bash", "-c", write_cmd],
             demux=True,

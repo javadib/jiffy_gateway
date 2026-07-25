@@ -86,6 +86,7 @@ The file must contain exactly one JSON object with these fields:
 |----------------------|----------|----------|-------------|
 | `status`             | string   | yes      | `"done"` if the task was completed, `"failed"` if it was not. |
 | `branch_name`        | string   | yes      | The branch you created or worked on. |
+| `branch_base`        | string   | yes      | The branch you created new branch from. |
 | `pr_url`             | string   | no       | URL of the PR/MR you opened, if any. |
 | `programming_language` | string | no       | Best-effort detection of the primary language used (e.g. `"python"`, `"typescript"`). |
 | `summary`            | string   | yes      | A brief summary of what you did. |
