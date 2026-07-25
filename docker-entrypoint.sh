@@ -2,7 +2,7 @@
 set -e
 
 echo "Running database migrations..."
-python manage.py migrate --noinput
+uv run python manage.py migrate --noinput
 
 echo "Starting application..."
 exec "$@"

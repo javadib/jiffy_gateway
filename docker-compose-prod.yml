@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runner
-    command: python manage.py runserver 0.0.0.0:8000
+    command: uv run python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
       - ./data:/app/data
