@@ -17,9 +17,7 @@ RUN addgroup --system app && adduser --system --ingroup app app
 
 COPY --chown=app:app . .
 
-RUN python manage.py collectstatic --noinput
-
-USER app
+RUN mkdir -p data && python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
