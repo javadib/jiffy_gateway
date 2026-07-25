@@ -7,6 +7,7 @@ services:
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
+      - jiffy-db:/app/db.sqlite3
     ports:
       - "8000:8000"
     env_file:
@@ -39,6 +40,7 @@ services:
     user: root
     volumes:
       - .:/app
+      - jiffy-db:/app/db.sqlite3
       - ./opencode.json:/app/opencode.json
     env_file:
       - .env
@@ -160,6 +162,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  jiffy-db:
 
 networks:
   jiffy-internal:
