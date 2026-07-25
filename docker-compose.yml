@@ -50,9 +50,9 @@ services:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       # Override Redis URLs from .env — 127.0.0.1 inside a container is the
       # container itself, not the host.  Use the Docker DNS name "redis" instead.
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: redis://${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://${REDIS_PASSWORD}@redis:6379/2
       # OpenCode config — the project root is mounted at /app, so the config
       # file (opencode.json) is at /app/opencode.json inside this container.
       SANDBOX_OPENCODE_CONFIG_PATH: /app/opencode.json
@@ -143,7 +143,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
