@@ -66,8 +66,8 @@ RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_$
     | tar xz --strip-components=2 -C /usr/local/bin "gh_${GH_VERSION}_linux_amd64/bin/gh"
 
 # --- glab (GitLab CLI) ---
-#RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" \
-#    | tar xz --strip-components=1 -C /usr/local/bin "glab_${GLAB_VERSION}_linux_amd64/bin/glab"
+RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" \
+    | tar xz --strip-components=1 -C /usr/local/bin "bin/glab"
 
 # --- tea (Gitea CLI) ---
 #RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea_${TEA_VERSION}_linux_amd64.tar.gz" \
