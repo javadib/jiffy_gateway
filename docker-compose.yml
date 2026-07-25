@@ -39,7 +39,7 @@ services:
     user: root
     volumes:
       - .:/app
-      - ./docker/sandbox/opencode.json:/app/opencode.json
+      - ./opencode.json:/app/opencode.json
     env_file:
       - .env
     environment:

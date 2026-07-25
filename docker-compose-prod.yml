@@ -8,7 +8,7 @@ services:
     volumes:
       - .:/app
     ports:
-      - "8000:8000"
+      - "${WEB_PORT:-8080}:80"
     environment:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: ${DEBUG}
@@ -50,7 +50,7 @@ services:
     user: root
     volumes:
       - .:/app
-      - ./docker/sandbox/opencode.json:/app/opencode.json
+      - ./opencode.json:/app/opencode.json
     environment:
       DOCKER_HOST: "tcp://docker-socket-proxy:2375"
       SECRET_KEY: ${SECRET_KEY}
@@ -146,13 +146,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-        
+
   redis:
     image: redis:8.8.0
     container_name: redis
     restart: always
     ports:
-      - "6389:6379"
+      - "$127.0.0.1:{REDIS_PORT:-6379}:6379"
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD}
