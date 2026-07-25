@@ -1,116 +1,327 @@
-# Jiffy
-### Autonomous Software Engineering Platform
+# Jiffy Gateway
 
-**Self-hosted AI workers that turn development tasks into reviewed code changes — from GitHub, GitLab, Gitea, Telegram, APIs, and beyond.**
-
-Jiffy is an open-source, autonomous software engineering platform: it lets any team delegate development work to an AI agent from wherever that work already gets requested — a mentioned Issue, a chat message, or a direct API call — and get the result back as a reviewed Pull Request, without any manual commit/push/PR work.
-
-Unlike platform-bundled coding agents, Jiffy is designed to be **self-hosted on your own infrastructure**, **channel-agnostic** (any place a task can be described can become a Jiffy entry point), and lets you **choose your own LLM/agent backend** — useful for teams on self-managed GitLab/Gitea, teams with data-residency or compliance constraints, or teams that already standardize on a specific model provider.
-
-> **Current phase**: GitHub, GitLab, and Gitea Issues are fully supported today. Telegram, a public API, and other entry points are on the [roadmap](#roadmap) — the architecture is already channel-agnostic by design, so adding them doesn't require changing the platform's core.
-
----
+Central server for the [Jiffy](https://github.com/javadib/jiffy_gateway) task automation system. Receives pre-filtered task requests (full Issue/thread history) from lightweight edge components running on GitHub Actions, GitLab CI, or Gitea Actions, provisions an isolated sandbox container, clones the target repository, hands off the entire coding task to an AI agent, and reports results via a signed callback.
 
 ## How It Works
 
-1. **Mention the bot** on an Issue (or an Issue comment) in your repository, describing the task you want done.
-2. **A lightweight edge check** (a GitHub Action / GitLab CI job / Gitea Action, running in your own repo) verifies the bot was actually mentioned. If not, nothing happens — no noise ever reaches the gateway.
-3. **On a valid mention**, the edge component collects the full Issue thread (all comments) and sends it to your self-hosted Jiffy server.
-4. **The gateway queues the task** and, when a worker is free, runs a coding agent against an isolated copy of your repository to make the requested changes.
-5. **Once finished**, Jiffy commits the changes, pushes a new branch, and opens a Pull Request. If you didn't specify a branch name, one is generated from the task title (e.g. `Jiffy/add-rate-limiting`).
-6. **A summary report and the PR link** are posted back as a comment on the same Issue.
-
 ```
-Issue mention ──▶ Edge check (Action) ──▶ gateway ──▶ Queue ──▶ Isolated container
-                                                                            │
-                        Issue comment (report + PR link) ◀── PR opened ◀───┘
+Edge (GitHub/GitLab/Gitea Actions)
+        │
+        │  POST /api/{provider}/ingest
+        ▼
+┌──────────────┐    payload     ┌─────────┐   execute_task   ┌─────────────────┐
+│   Ingestion  │───────────────▶│  Redis  │◀──────dispatch───│  Celery Worker  │
+│   Endpoints  │                │         │                  │  (runs jobs)    │
+│   (Django)   │                └─────────┘                  └────────┬────────┘
+└──────────────┘                                                     │
+                                                            DOCKER_HOST (tcp)
+                                                                     │
+                                                          ┌──────────▼──────────┐
+                                                          │ Docker Socket Proxy │
+                                                          │ (restricted API)    │
+                                                          └──────────┬──────────┘
+                                                                     │ /var/run/docker.sock (read-only)
+                                                                     ▼
+                                                              Docker Engine
+                                                                     │
+                                                          ┌──────────▼──────────┐
+                                                          │  Sandbox Container  │
+                                                          │  (per-task, ephemeral)│
+                                                          │  ┌────────────────┐ │
+                                                          │  │  AI Agent      │ │
+                                                          │  │  (OpenCode)    │ │
+                                                          │  └────────────────┘ │
+                                                          └─────────────────────┘
 ```
 
-## Features
+### End-to-end sequence
 
-- 🌐 **Channel-agnostic by design**: GitHub, GitLab, and Gitea Issues today; Telegram, a public API, and other entry points planned — new channels plug into the same core pipeline.
-- 🧠 **Model-agnostic execution**: bring your own coding agent/LLM backend instead of being locked to one vendor.
-- 🏠 **Fully self-hosted**: runs on your own infrastructure — no code ever needs to leave your network unless you configure it to.
-- 🔒 **Isolated execution**: every task runs in an ephemeral, resource-limited container, so nothing outside its sandbox can be affected.
-- 🚦 **No noise, low overhead**: mention-detection happens at the edge (in your repo's own CI, or the relevant channel's own filter), so only validated requests ever reach the gateway — designed for low request volumes (hundreds/day), not massive scale.
-- 🌿 **Automatic branch naming**: generates a sensible branch name from the task when you don't provide one.
-- 📊 **Traceable task status**: every task's state (queued, running, done, failed) is tracked and inspectable.
-- 🧩 **Extensible core**: the platform's execution pipeline (queueing, isolated execution, commit/push/PR, reporting) is fully decoupled from how a task enters the system — adding a channel means writing an adapter, not touching the core.
+1. **Receive** -- An edge component (GitHub Action, GitLab CI job, etc.) POSTs the full Issue/thread to one of three provider-specific ingestion endpoints.
+2. **Deduplicate** -- A Redis lock (`jiffy:lock:issue:{provider}:{id}`) prevents duplicate webhook deliveries from creating duplicate tasks.
+3. **Store** -- The Task is written to the database (`status=queued`) and the full payload (including the repo access token) is stored in Redis with a short TTL.
+4. **Provision** -- A Celery worker picks up the job, builds the sandbox image if needed, and starts an ephemeral Docker container.
+5. **Clone** -- The target repository is cloned into `/workspace` inside the container using the provided repo token.
+6. **Agent hand-off** -- The AI agent (OpenCode) receives the raw Issue text, the working directory path, and a detailed instruction contract. From here the agent handles everything: analyzing requirements, installing dependencies, implementing changes, verifying, committing, pushing, and optionally opening a PR.
+7. **Report** -- The agent emits a structured result (JSON). The Gateway captures it, updates the Task, and POSTs a signed callback to the caller.
+
+## Prerequisites
+
+- Python 3.12+
+- Redis
+- Docker (for sandbox containers)
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+
+## Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/javadib/jiffy_gateway.git
+cd jiffy_gateway
+
+# Create and fill in environment configuration
+cp .env.example .env
+# Edit .env with your secrets (see Configuration below)
+
+# Install dependencies
+uv sync
+
+# Run database migrations
+python manage.py migrate
+
+# Start Redis (if not using Docker)
+redis-server
+
+# Start the development server
+python manage.py runserver
+
+# In a separate terminal, start the Celery worker
+celery -A config worker -Q execute --concurrency=3 -l info
+```
+
+The API is available at `http://localhost:8000/api/`. Interactive documentation (Swagger UI) is at `http://localhost:8000/api/docs/`.
+
+## Running with Docker Compose
+
+```bash
+cp .env.example .env
+# Edit .env with your secrets
+
+docker compose up
+```
+
+This starts four services on an internal bridge network:
+
+| Service | Description | Port |
+|---------|-------------|------|
+| `web` | Django application server | 8000 (exposed) |
+| `celery` | Celery worker (executes sandbox jobs) | -- |
+| `docker-socket-proxy` | Restricted Docker API proxy | 2375 (internal only) |
+| `redis` | Message broker and payload store | 6379 (exposed) |
+
+## Configuration
+
+All configuration is via environment variables. Copy `.env.example` to `.env` and fill in the values.
+
+### Django
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SECRET_KEY` | Yes | -- | Django secret key |
+| `DEBUG` | No | `False` | Enable debug mode |
+| `ALLOWED_HOSTS` | No | `127.0.0.1,localhost` | Comma-separated allowed hosts |
+
+### Redis
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `REDIS_URL` | Yes | -- | Redis URL for cache (DB 0) |
+| `CELERY_BROKER_URL` | Yes | -- | Redis URL for Celery broker (DB 1) |
+| `CELERY_RESULT_BACKEND` | Yes | -- | Redis URL for Celery results (DB 2) |
+| `REDIS_PASSWORD` | No | -- | Redis auth password |
+
+### Ingestion Tokens
+
+Each provider has its own shared secret, sent via the `X_JIFFY_TOKEN` request header and verified with constant-time comparison.
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_INGEST_TOKEN` | Shared secret for GitHub ingestion endpoint |
+| `GITLAB_INGEST_TOKEN` | Shared secret for GitLab ingestion endpoint |
+| `GITEA_INGEST_TOKEN` | Shared secret for Gitea ingestion endpoint |
+
+Generate secrets with:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+### Sandbox
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SANDBOX_IMAGE` | No | `jiffy-sandbox:1.1.0` | Docker image for sandbox containers |
+| `SANDBOX_MEM_LIMIT` | No | `1g` | Memory limit per container |
+| `SANDBOX_CPU_LIMIT` | No | `1` | CPU limit per container |
+| `SANDBOX_NETWORK_ALLOWLIST` | No | *(see .env.example)* | Comma-separated hostnames the sandbox can reach |
+
+### Docker
+
+| Variable | Description |
+|----------|-------------|
+| `DOCKER_HOST` | Docker daemon URL. Set automatically in docker-compose; leave unset for local development to use the default socket. |
+
+## API Endpoints
+
+### Ingestion
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/github/ingest` | Receive task from GitHub Actions |
+| POST | `/api/gitlab/ingest` | Receive task from GitLab CI |
+| POST | `/api/gitea/ingest` | Receive task from Gitea Actions |
+
+All endpoints accept the same JSON payload shape:
+
+```json
+{
+  "repo": {
+    "url": "https://github.com/org/repo.git",
+    "token": "ghp_..."
+  },
+  "issue": {
+    "text": "Full issue/thread content...",
+    "issue_external_id": "12345"
+  },
+  "callback": {
+    "url": "https://your-server.com/callback",
+    "secret": "hmac-signing-secret"
+  }
+}
+```
+
+**Headers:** `X_JIFFY_TOKEN: <provider_secret>`
+
+**Responses:**
+- `202 Accepted` -- Task enqueued successfully (or duplicate delivery detected)
+- `400 Bad Request` -- Missing fields or invalid payload
+- `401 Unauthorized` -- Missing or invalid `X_JIFFY_TOKEN`
+
+### Documentation
+
+| Path | Description |
+|------|-------------|
+| `/api/docs/` | Swagger UI |
+| `/api/redoc/` | ReDoc |
+| `/api/schema/` | OpenAPI schema (JSON) |
 
 ## Architecture
 
-- **Platform core**: Django (Django ORM, SQLite by default — designed to move to PostgreSQL with a config-only change as the project grows)
-- **Task queue**: Celery, backed by Redis
-- **Execution**: Docker, one ephemeral container per task
-- **Channel adapters**: per-source integrations (GitHub Action / GitLab CI / Gitea Action today; Telegram bot and a public API planned) responsible only for detecting a valid task request and forwarding the full task context — the platform core has no channel-specific logic
+### Generic Sandbox Image
 
-## Installation & Setup
+All tasks run in the same generic sandbox image, regardless of language or framework. The image bundles:
 
-> ⚠️ Jiffy is under active development. Setup steps will stabilize as the project matures — check the [Releases](../../releases) page for the latest stable version.
+- **Python** (via uv), **Node.js** (via nvm), **Go** (via gvm)
+- **Git provider CLIs** -- `gh` (GitHub), `glab` (GitLab), `tea` (Gitea)
+- **OpenCode** coding agent
+- **Build tools** -- build-essential, curl, git, ca-certificates
 
-### Prerequisites
+The agent is responsible for installing any additional runtime versions or packages the task requires. There is no pre-container language detection or per-language image selection.
 
-- Docker and Docker Compose
-- A Redis instance (or use the bundled one via Docker Compose)
-- A git provider account/token with permission to push branches and open PRs on the target repo(s)
-- Access to your chosen coding agent/LLM backend
+### Docker Socket Proxy
 
-### Quick Start
+The Celery worker manages sandbox containers through a [tecnativa/docker-socket-proxy](https://github.com/tecnativa/docker-socket-proxy) instead of mounting the Docker socket directly. This limits the worker to only the Docker API endpoints it needs:
 
-```bash
-git clone https://github.com/javadib/jiffy_gateway.git
-cd jiffy
-cp .env.example .env       # fill in git provider tokens, Redis URL, agent/LLM credentials
-docker compose up -d
-python manage.py migrate
+| Endpoint Group | Enabled | Purpose |
+|----------------|---------|---------|
+| `CONTAINERS` | Yes | Create, start, stop, remove sandbox containers |
+| `IMAGES` | Yes | Check if sandbox image exists |
+| `BUILD` | Yes | Build sandbox image from Dockerfile |
+| `NETWORKS` | Yes | Create/inspect `jiffy-sandbox-net` bridge network |
+| `EXEC` | Yes | Exec into running containers (clone, agent run) |
+| `POST` | Yes | Global toggle for write operations |
+| All others | No | Disabled -- not needed |
+
+The proxy is not exposed to the host. It is only reachable from services on the `jiffy-internal` Docker bridge network.
+
+### Security Model
+
+- **Repo access tokens** are stored only in Redis (4-hour TTL) and as container environment variables -- never in the Django database.
+- **Ingestion secrets** are per-provider, stored in environment variables, and compared with `hmac.compare_digest`.
+- **Callback payloads** are signed with HMAC-SHA256 and sent in the `X-Jiffy-Signature` header.
+- **Log redaction** ensures tokens and secrets never appear in log output.
+- **Sandbox network isolation** restricts containers to an allow-list of package registries and git provider hosts.
+
+### Task Lifecycle
+
+```
+queued  ──▶  provisioning  ──▶  cloning  ──▶  running  ──▶  reporting  ──▶  done
+                                                              │
+                                                              └──▶  failed
 ```
 
-### Connect a Repository
+Tasks that fail at any stage are reported as `failed` with an `error_message`. Transient errors (Docker timeouts, network issues) trigger automatic retries (up to 3, with 60-second intervals). Logical failures (agent couldn't complete the task) fail immediately without retry.
 
-1. Add the Jiffy webhook edge component to your repository:
-   - **GitHub**: add the provided GitHub Action workflow file to `.github/workflows/`.
-   - **GitLab**: add the provided CI job to `.gitlab-ci.yml`.
-   - **Gitea**: add the provided Gitea Action workflow.
-2. Set the shared secret (used to authenticate requests to your gateway) as a repository secret.
-3. Point the edge component's webhook URL at your Jiffy server.
-4. Mention the bot on an Issue to trigger your first task.
+## Project Structure
 
-Detailed configuration options (mention tag, timeouts, resource limits, allowed repos) are documented in [`docs/configuration.md`](docs/configuration.md).
+```
+jiffy_gateway/
+├── apps/
+│   └── ingestion/          # Ingestion endpoints, auth, serializers, callback dispatch
+│       ├── auth.py         # Token verification (constant-time comparison)
+│       ├── callback.py     # Signed callback dispatch with retries
+│       ├── serializers.py  # DRF payload serializers
+│       ├── tasks.py        # Celery autodiscovery re-export
+│       ├── urls.py         # Provider-specific ingestion routes
+│       └── views.py        # GitHub/GitLab/Gitea ingestion views
+├── config/
+│   ├── settings/           # Django settings (base.py, test.py)
+│   ├── celery.py           # Celery app config + startup recovery
+│   ├── urls.py             # Root URL routing
+│   └── views.py            # Meta endpoint
+├── docker/
+│   └── sandbox/
+│       ├── Dockerfile      # Generic sandbox image (Python, Node, Go, agent CLI)
+│       ├── build.sh        # Image build script
+│       └── smoke-test.sh   # Sandbox image verification
+├── jobs/
+│   ├── models.py           # Task model
+│   ├── tasks.py            # execute_task Celery task (main pipeline)
+│   ├── execution/
+│   │   ├── agent.py        # Agent instruction builder + result parser
+│   │   ├── container.py    # Docker container lifecycle management
+│   │   └── exceptions.py   # Custom exception classes
+│   └── utils/
+│       └── redis.py        # Redis client + payload loader
+├── templates/              # Custom Swagger UI template
+├── tests/
+│   ├── test_auth.py        # Token verification tests
+│   ├── test_views.py       # Ingestion endpoint integration tests
+│   ├── test_execution.py   # Container, agent, and pipeline tests
+│   └── test_callback.py    # Callback dispatch tests
+├── docker-compose.yml      # Full development stack
+├── Dockerfile              # Gateway production image
+├── pyproject.toml          # Dependencies and project config
+└── manage.py               # Django management
+```
 
-## Roadmap
+## Testing
 
-- [x] GitHub Issue support
-- [x] GitLab Issue support
-- [x] Gitea Issue support
-- [ ] Public API channel (submit tasks directly, no git-issue-tracker required)
-- [ ] Configurable task triage (skip tasks that are too ambiguous/high-risk for automation)
-- [ ] Pluggable coding-agent backends (Claude Code, others)
-- [ ] PostgreSQL migration guide for larger deployments
-- [ ] Telegram channel support
-- [ ] Slack channel support
-- [ ] Web dashboard for task history and status (beyond Django Admin)
+```bash
+# Run all tests
+python manage.py test
 
-Have an idea? Open an Issue with the `enhancement` label — or better yet, mention the bot and let Jiffy build it.
+# Or with pytest
+python -m pytest tests/
+
+# With coverage
+python -m pytest tests/ --cov=jobs --cov=apps
+```
+
+## Development
+
+### Branching
+
+- `master` -- Production releases (auto-versioned via semantic-release)
+- `develop` -- Integration branch for next release
+
+### Code Quality
+
+- Type hints on all new functions
+- No raw SQL -- Django ORM only (ensures PostgreSQL portability)
+- All secrets from environment variables, never committed
+- Conventional commits (`feat`, `fix`, `refactor`, `perf`, `docs`, `chore`, `ci`)
+
+### Releasing
+
+Releases are automated via [python-semantic-release](https://python-semantic-release.readthedocs.io/). Pushing to `master` with conventional commit messages triggers version bumping, changelog generation, and Docker image publishing to GHCR.
 
 ## Contributing
 
-Contributions are welcome! Please:
-
-1. Open an Issue describing the bug/feature before submitting large changes, so we can discuss approach first.
-2. Fork the repo and create a feature branch (`git checkout -b feature/your-feature`).
-3. Make sure existing tests pass and add tests for new behavior.
-4. Open a Pull Request with a clear description of what changed and why.
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for coding conventions and development setup details.
-
-## Security
-
-If you discover a security vulnerability, please do **not** open a public Issue. Instead, report it privately as described in [`SECURITY.md`](SECURITY.md).
+1. Fork the repository
+2. Create a feature branch from `develop`
+3. Make your changes with tests
+4. Ensure tests pass: `python manage.py test`
+5. Submit a pull request to `develop`
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — free to use, self-host, and modify.
-
-## Acknowledgments
-
-Jiffy is built for teams who want the convenience of an autonomous software engineering platform — turning development requests into reviewed code changes — without being locked into a single git platform, channel, or LLM vendor.
+See [LICENSE](LICENSE) for details.
