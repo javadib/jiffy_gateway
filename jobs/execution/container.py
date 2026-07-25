@@ -278,15 +278,22 @@ def start_generic_sandbox_container(
 # ---------------------------------------------------------------------------
 
 
-def _inject_token_into_url(url: str, token: str) -> str:
+def _inject_token_into_url(url: str, token: str, provider: str = "github", username: str = "") -> str:
     """Inject a token into a git URL for authentication.
 
-    Converts https://github.com/user/repo.git to
-    https://TOKEN@github.com/user/repo.git
+    Provider-specific formats:
+    - GitHub:  https://TOKEN@github.com/user/repo.git
+    - GitLab:  https://USERNAME:TOKEN@gitlab.example.com/user/repo.git
+    - Gitea:   https://USERNAME:TOKEN@gitea.example.com/user/repo.git
     """
     parsed = urlparse(url)
     if parsed.scheme in ("http", "https") and parsed.hostname:
-        authenticated = f"{parsed.scheme}://{token}@{parsed.hostname}"
+        # GitLab and Gitea require username:token format
+        if provider in ("gitlab", "gitea") and username:
+            userinfo = f"{username}:{token}"
+        else:
+            userinfo = token
+        authenticated = f"{parsed.scheme}://{userinfo}@{parsed.hostname}"
         if parsed.port:
             authenticated += f":{parsed.port}"
         authenticated += parsed.path
@@ -306,12 +313,17 @@ def _redact_url(url: str) -> str:
 
 
 def clone_repo_in_container(
-        container: Container, repo_url: str, token: str, task_id: int = 0
+        container: Container,
+        repo_url: str,
+        token: str,
+        task_id: int = 0,
+        provider: str = "github",
+        username: str = "",
 ) -> None:
     """Clone the repository into the container's workspace directory."""
     logger.info("[%d] Cloning %s into container %s", task_id, _redact_url(repo_url), container.short_id)
 
-    authenticated_url = _inject_token_into_url(repo_url, token)
+    authenticated_url = _inject_token_into_url(repo_url, token, provider=provider, username=username)
 
     exit_code, (output, err) = container.exec_run(
         cmd=["git", "clone", authenticated_url, WORKSPACE],
