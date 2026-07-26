@@ -1,157 +1,76 @@
-name: Agent Auto-Implement Issue
+name: Jiffy Dispatch
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened]
   issue_comment:
     types: [created]
 
-env:
-  # Adjust these to match your actual conventions.
-  TRIGGER_LABEL: agent-ready
-  MENTION_STRING: "@jiffy"
-  BASE_BRANCH: develop
-
 jobs:
-  implement:
+  dispatch:
     runs-on: ubuntu-latest
-    # Run when:
-    # - a new issue is opened, OR
-    # - an issue gets labeled "agent-ready", OR
-    # - a comment on an issue (not a PR) mentions the agent or the trigger label
-    if: >
-      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'agent-ready') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request == null &&
-        (contains(github.event.comment.body, '@jiffy') || contains(github.event.comment.body, 'agent-ready')))
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@jiffy')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@jiffy'))
     steps:
-      - uses: actions/checkout@v4
+      - name: Collect thread and dispatch to Jiffy Gateway
+        uses: actions/github-script@v9
+        env:
+          JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
+          JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
+          REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
-          ref: ${{ env.BASE_BRANCH }}
-          fetch-depth: 0
+          script: |
+            const crypto = require('crypto');
+            const issueNumber = context.payload.issue.number;
 
-      - name: Set issue context
-        id: issue
-        run: |
-          echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
-          echo "title=${{ github.event.issue.title }}" >> "$GITHUB_OUTPUT"
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
 
-      - name: Extract branch name from issue body
-        id: extract
-        run: |
-          BODY=$(cat <<'EOF'
-          ${{ github.event.issue.body }}
-          EOF
-          )
-          # Looks for a line like "branch: xxx" or "branch name: xxx" in the issue body.
-          BRANCH=$(echo "$BODY" | grep -iE '^\s*(branch( name)?)\s*:' | head -n1 | sed -E 's/^[^:]*:\s*//' | tr -d '`\r' | xargs)
-          if [ -z "$BRANCH" ]; then
-            echo "No explicit branch name found in the issue body — the agent will be asked to propose one following Conventional Commits type prefixes."
-          fi
-          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
 
-      - run: npm i -g @mimo-ai/cli
+            const fullText = [issue.data.body || '', ...comments.map(c => c.body || '')].join(' --- ');
 
-      - name: Configure git identity
-        run: |
-          git config user.name "jiffy-agent[bot]"
-          git config user.email "jiffy-agent[bot]@users.noreply.github.com"
+            const repoToken = process.env.REPO_TOKEN;
+            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
+            const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
+            //const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
+            const callbackSecret = repoToken;
 
-      - name: Run jiffy
-        env:
-          AGENT_API_KEY: ${{ secrets.AGENT_API_KEY }}
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
-          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          BASE_BRANCH_NAME: ${{ env.BASE_BRANCH }}
-          TARGET_BRANCH_NAME: ${{ steps.extract.outputs.name }}
-        run: |
-          if [ -n "$TARGET_BRANCH_NAME" ]; then
-            BRANCH_INSTRUCTION="Target branch: \`$TARGET_BRANCH_NAME\` — use this exact name, it was explicitly provided. Do not rename it."
-          else
-            BRANCH_INSTRUCTION="Target branch: not provided. Choose one yourself, using a Conventional Commits type prefix: \`<type>/<short-kebab-case-summary>\` — e.g. \`feat/notification-provider-configs\`, \`fix/wallet-double-wrap\`. <type> must be one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert."
-          fi
+            console.log(`callbackSecret: ${callbackSecret}`)
 
-          PROMPT=$(cat <<PROMPTEOF
-          Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+            const payload = {
+              repo: { url: repoUrl, token: repoToken, username: context.actor },
+              issue: { text: fullText, external_issue_id: String(issueNumber) },
+              callback: { url: callbackUrl, secret: callbackSecret }
+            };
 
-          ${ISSUE_BODY}
+            const response = await fetch(`${process.env.JIFFY_URL}/api/github/ingestion`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Jiffy-Token': process.env.JIFFY_INGEST_TOKEN
+              },
+              body: JSON.stringify(payload)
+            });
 
-          ---
-          ## Git Workflow Instructions (perform these yourself — do not skip any step)
+            const responseText = await response.text();
+            console.log(`HTTP Status: ${response.status}`);
+            console.log(responseText);
 
-          1. Base branch: \`${BASE_BRANCH_NAME}\`.
-          2. ${BRANCH_INSTRUCTION}
-          3. Create and check out the target branch from \`${BASE_BRANCH_NAME}\` before making any changes.
-          4. Implement the requested work.
-          5. Stage all your changes (\`git add\`) and commit them yourself — do not leave changes uncommitted and assume something else will commit for you.
-          6. Write the commit message strictly following the Conventional Commits specification (https://www.conventionalcommits.org/):
-             - Format: \`<type>[optional scope]: <description>\`
-             - \`<type>\` must be one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert — pick the one that actually matches the change (e.g. \`fix\` for a bug fix, \`feat\` for new functionality, \`refactor\` for non-behavioral restructuring, \`test\` for test-only changes).
-             - \`<description>\` is a short, imperative, present-tense summary (e.g. "add otp rate limiting", not "added" or "adds"), no trailing period.
-             - If the change is non-trivial, add a body paragraph after a blank line explaining what changed and why.
-             - If the change includes a breaking change, add a \`BREAKING CHANGE: <explanation>\` footer.
-             - The message must accurately reflect the actual diff you produced — never a generic or placeholder message like "update files" or "agent changes".
-             - If your work naturally splits into distinct concerns, prefer multiple well-scoped Conventional Commits over one large mixed commit.
-          7. Push the branch and your commit(s) to \`origin\` yourself. Do not rely on any external step to do this for you — confirm with \`git status\` and \`git log\` that your commit exists locally, and confirm \`git push\` succeeded, before finishing.
-          8. Report the final branch name and commit hash(es) at the end of your run.
-          PROMPTEOF
-          )
-
-          mimo run --dangerously-skip-permissions "$PROMPT"
-
-      # Safety net only — this does NOT create or alter any commit, it only
-      # pushes what the agent already committed locally, in case the agent's
-      # environment failed to push it itself. Commit authorship/message stays
-      # entirely the agent's responsibility per the Git Workflow Instructions above.
-      - name: Ensure the agent's branch is pushed (safety net)
-        id: safetynet
-        run: |
-          CURRENT_BRANCH=$(git branch --show-current)
-          if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "${{ env.BASE_BRANCH }}" ]; then
-            echo "Agent never checked out a new branch — nothing to push."
-            echo "branch=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "branch=$CURRENT_BRANCH" >> "$GITHUB_OUTPUT"
-
-          if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
-            echo "No local commit exists on $CURRENT_BRANCH — agent made no commit."
-            exit 0
-          fi
-
-          git fetch origin "$CURRENT_BRANCH" 2>/dev/null || true
-          LOCAL_SHA=$(git rev-parse HEAD)
-          REMOTE_SHA=$(git rev-parse "origin/$CURRENT_BRANCH" 2>/dev/null || echo "")
-
-          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-            echo "Local commit exists but wasn't pushed by the agent — pushing now as a fallback."
-            git push origin "HEAD:$CURRENT_BRANCH"
-          else
-            echo "Branch already pushed by the agent — nothing to do."
-          fi
-
-      - name: Verify a commit exists on origin
-        id: verify
-        run: |
-          git fetch origin
-          TARGET="${{ steps.safetynet.outputs.branch }}"
-          if [ -z "$TARGET" ]; then
-            echo "verified=false" >> "$GITHUB_OUTPUT"
-          elif git ls-remote --exit-code --heads origin "$TARGET" >/dev/null 2>&1; then
-            echo "verified=true" >> "$GITHUB_OUTPUT"
-            echo "branch=$TARGET" >> "$GITHUB_OUTPUT"
-          else
-            echo "verified=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Comment if nothing was pushed
-        if: steps.verify.outputs.verified == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment "${{ steps.issue.outputs.number }}" \
-            --body "The agent ran but no commit could be found on any branch (expected \`${{ steps.extract.outputs.name }}\` if one was specified). Check the workflow logs — the agent may have failed to check out a branch or commit as instructed."
+            if (response.status >= 400) {
+              core.setFailed(`Jiffy ingestion failed with status ${response.status}: ${responseText}`);
+            }
