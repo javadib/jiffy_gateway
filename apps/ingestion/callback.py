@@ -1,7 +1,5 @@
-"""Callback dispatch — sends signed reports to callback_url."""
+"""Callback dispatch — sends reports to callback_url."""
 
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -26,7 +24,7 @@ def send_callback(
         error_message: str | None = None,
         model: str | None = None,
 ) -> None:
-    """Send a signed callback to task.callback_url.
+    """Send a callback to task.callback_url.
 
     Retries up to MAX_RETRIES times on failure. Logs failures without
     raising exceptions.
@@ -51,14 +49,8 @@ def send_callback(
 
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
-    signature = hmac.new(
-        task.callback_secret.encode("utf-8"), body, hashlib.sha256
-    ).hexdigest()
-
     headers = {
         "Content-Type": "application/json",
-        "X-Jiffy-Signature": signature,
-        "X-GitHub-Api-Version": "2026-03-10",
         "Authorization": "Bearer " + task.callback_secret,
     }
 

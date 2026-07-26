@@ -21,7 +21,7 @@ class IssueSerializer(serializers.Serializer):
 
 class CallbackSerializer(serializers.Serializer):
     url = serializers.URLField(max_length=500, help_text="URL to POST the final result to")
-    secret = serializers.CharField(max_length=256, help_text="HMAC secret for signing the callback request")
+    secret = serializers.CharField(max_length=256, help_text="Opaque secret passed through to the callback endpoint")
 
 
 class IngestionPayloadSerializer(serializers.Serializer):

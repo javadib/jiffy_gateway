@@ -92,7 +92,7 @@ class Task(models.Model):
     branch_name = models.CharField(max_length=255, null=True, blank=True)  # populated from the agent's final result
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
     callback_url = models.URLField()
-    callback_secret = models.CharField(max_length=128)
+    callback_secret = models.CharField(max_length=256)
     pr_url = models.URLField(null=True, blank=True)  # populated from the agent's final result, if it opened one
     error_message = models.TextField(null=True, blank=True)
     celery_task_id = models.CharField(max_length=64, null=True, blank=True)
@@ -241,7 +241,7 @@ There is no Gateway-side branch-naming function — the agent decides the branch
 
 ## Callback / Reporting
 
-- After the job finishes (success or failure), POST the result to `task.callback_url`, signed with `task.callback_secret` (HMAC in a header, e.g. `X-Jiffy-Signature`).
+- After the job finishes (success or failure), POST the result to `task.callback_url`, passing `task.callback_secret` through as an opaque value (e.g. `Authorization: Bearer <secret>`). The Gateway does not sign, hash, or transform the secret — it stores and forwards it byte-for-byte unchanged.
 - Payload includes: `task_id`, `status`, `summary` (as produced by the agent — already includes the code-review bot mention if the agent determined one was needed), `pr_url` (if the agent opened one), `error_message` (if failed).
 - Retry the callback call **up to 3 times** on failure — if the edge/callback endpoint is temporarily unreachable, don't lose the result. Log failures clearly; do not silently drop them. If all 3 attempts fail, the task remains in its final local status (`done`/`failed`) with the report undelivered — this is logged, not silently swallowed.
 - The central server does **not** hold any chat/comment-posting credentials (no GitHub comment token, no Telegram/Slack tokens) — posting the final comment is the responsibility of whatever handles `callback_url` (the git server or an intermediary), not this codebase.
@@ -256,7 +256,7 @@ There is no Gateway-side branch-naming function — the agent decides the branch
 - Standard Django app structure; keep webhook ingestion, container provisioning/clone, and agent hand-off in separate apps/modules (e.g. `ingestion/`, `execution/`) rather than one monolithic app.
 - Type hints on all new functions.
 - No raw SQL (see Database Strategy above) — this is a hard rule, not a style preference.
-- Settings must read all secrets (`X_JIFFY_TOKEN` expected values per provider, callback HMAC keys, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens come from the request payload, not from settings.
+- Settings must read all secrets (`X_JIFFY_TOKEN` expected values per provider, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens and `callback.secret` come from the request payload, not from settings.
 - Favor small, testable functions for each Gateway-owned step (`start_generic_sandbox_container`, `clone_repo_in_container`, `build_agent_instructions`, `run_agent_in_container`, `read_agent_result`, `send_callback`) so they can be unit-tested independently of Celery/Docker where possible (mock the Docker/agent calls in tests).
 
 ## Out of Scope for This Repo
