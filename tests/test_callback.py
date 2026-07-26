@@ -1,7 +1,5 @@
 """Tests for callback dispatch."""
 
-import hashlib
-import hmac
 import json
 from unittest.mock import MagicMock, patch
 
@@ -43,11 +41,23 @@ class TestSendCallback(TestCase):
         self.assertEqual(payload["summary"], "Task completed")
 
         headers = call_args[1]["headers"]
-        self.assertIn("X-Jiffy-Signature", headers)
-        expected_sig = hmac.new(
-            self.task.callback_secret.encode(), body, hashlib.sha256
-        ).hexdigest()
-        self.assertEqual(headers["X-Jiffy-Signature"], expected_sig)
+        self.assertNotIn("X-Jiffy-Signature", headers)
+
+    @patch("apps.ingestion.callback.requests.post")
+    def test_sends_raw_secret_in_authorization_header(self, mock_post):
+        """The callback secret must be sent byte-for-byte unchanged in the Authorization header."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        send_callback(self.task, status="done")
+
+        headers = mock_post.call_args[1]["headers"]
+        self.assertEqual(
+            headers["Authorization"],
+            "Bearer " + self.task.callback_secret,
+        )
+        self.assertIn("Bearer callback-secret-123", headers["Authorization"])
 
     @patch("apps.ingestion.callback.time.sleep")
     @patch("apps.ingestion.callback.requests.post")

@@ -270,9 +270,6 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
         # Write config into the container using printf + heredoc to avoid escaping issues
         escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
         write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
-
-        logger.info(f"[%d] OpenCode config: %s", task_id, write_cmd)
-
         exit_code, (_, err) = container.exec_run(
             cmd=["bash", "-c", write_cmd],
             demux=True,
@@ -315,11 +312,11 @@ def start_generic_sandbox_container(
             settings.SANDBOX_MEM_LIMIT,
             settings.SANDBOX_CPU_LIMIT,
         )
-        _ensure_network(client)
+        # _ensure_network(client)
 
-        networking_config = {}
-        if repo_url:
-            networking_config = _build_network_config(repo_url)
+        # networking_config = {}
+        # if repo_url:
+        #     networking_config = _build_network_config(repo_url)
 
         container = client.containers.run(
             settings.SANDBOX_IMAGE,
@@ -329,8 +326,8 @@ def start_generic_sandbox_container(
             mem_limit=settings.SANDBOX_MEM_LIMIT,
             cpuset_cpus=str(settings.SANDBOX_CPU_LIMIT),
             environment=env_vars,
-            network="jiffy-sandbox-net",
-            **networking_config,
+            # network="jiffy-sandbox-net",
+            # **networking_config,
         )
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
 
