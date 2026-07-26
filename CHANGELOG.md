@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.3.2 (2026-07-26)
+
+### Bug Fixes
+
+- Update Docker publish workflow to use GITHUB_TOKEN for authentication
+  ([`2fa070d`](https://github.com/javadib/jiffy_gateway/commit/2fa070dd586700b236cbeed70491e556ac921156))
+
+
 ## v1.3.1 (2026-07-26)
 
 ### Bug Fixes
