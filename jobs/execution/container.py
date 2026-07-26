@@ -137,17 +137,8 @@ def _extract_git_host(repo_url: str) -> str | None:
 
 
 def _build_network_config(repo_url: str) -> dict:
-    """Build Docker network configuration with an allow-list."""
-    host = _extract_git_host(repo_url)
-    allowlist: list[str] = list(settings.SANDBOX_NETWORK_ALLOWLIST)
-    if host and host not in allowlist:
-        allowlist.append(host)
-
-    extra_hosts = {h: h for h in allowlist if "/" not in h}
-
-    return {
-        "extra_hosts": extra_hosts,
-    }
+    """Build Docker network configuration for the sandbox container."""
+    return {}
 
 
 def _ensure_network(client: docker.DockerClient) -> str:
@@ -179,16 +170,13 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
     Docker (the Docker daemon needs host-accessible paths, but the config
     file is only accessible inside the Celery container).
     """
-    opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
-    if not opencode_config:
-        return
-
-    config_path = Path(opencode_config)
+    # Read opencode.json from the project root
+    config_path = Path(__file__).resolve().parent.parent.parent / "opencode.json"
     if not config_path.is_file():
         logger.warning(
-            "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+            "[%d] opencode.json not found in project root: %s",
             task_id,
-            opencode_config,
+            config_path,
         )
         return
 
@@ -197,6 +185,9 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
         # Write config into the container using printf + heredoc to avoid escaping issues
         escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
         write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
+
+        logger.info(f"[%d] OpenCode config: %s", task_id, write_cmd)
+
         exit_code, (_, err) = container.exec_run(
             cmd=["bash", "-c", write_cmd],
             demux=True,
@@ -287,15 +278,22 @@ def start_generic_sandbox_container(
 # ---------------------------------------------------------------------------
 
 
-def _inject_token_into_url(url: str, token: str) -> str:
+def _inject_token_into_url(url: str, token: str, provider: str = "github", username: str = "") -> str:
     """Inject a token into a git URL for authentication.
 
-    Converts https://github.com/user/repo.git to
-    https://TOKEN@github.com/user/repo.git
+    Provider-specific formats:
+    - GitHub:  https://TOKEN@github.com/user/repo.git
+    - GitLab:  https://USERNAME:TOKEN@gitlab.example.com/user/repo.git
+    - Gitea:   https://USERNAME:TOKEN@gitea.example.com/user/repo.git
     """
     parsed = urlparse(url)
     if parsed.scheme in ("http", "https") and parsed.hostname:
-        authenticated = f"{parsed.scheme}://{token}@{parsed.hostname}"
+        # GitLab and Gitea require username:token format
+        if provider in ("gitlab", "gitea") and username:
+            userinfo = f"{username}:{token}"
+        else:
+            userinfo = token
+        authenticated = f"{parsed.scheme}://{userinfo}@{parsed.hostname}"
         if parsed.port:
             authenticated += f":{parsed.port}"
         authenticated += parsed.path
@@ -315,12 +313,17 @@ def _redact_url(url: str) -> str:
 
 
 def clone_repo_in_container(
-        container: Container, repo_url: str, token: str, task_id: int = 0
+        container: Container,
+        repo_url: str,
+        token: str,
+        task_id: int = 0,
+        provider: str = "github",
+        username: str = "",
 ) -> None:
     """Clone the repository into the container's workspace directory."""
     logger.info("[%d] Cloning %s into container %s", task_id, _redact_url(repo_url), container.short_id)
 
-    authenticated_url = _inject_token_into_url(repo_url, token)
+    authenticated_url = _inject_token_into_url(repo_url, token, provider=provider, username=username)
 
     exit_code, (output, err) = container.exec_run(
         cmd=["git", "clone", authenticated_url, WORKSPACE],

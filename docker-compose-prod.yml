@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runner
+    container_name: web
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
@@ -31,11 +32,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 512m
+          cpus: "2.0"
+          memory: 2g
         reservations:
-          cpus: "0.1"
-          memory: 128m
+          cpus: "0.5"
+          memory: 256m
     logging:
       driver: json-file
       options:
@@ -47,6 +48,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runner
+    container_name: celery
     command: celery -A config worker -Q execute --concurrency=3 -l info -n execute@%h
     user: root
     volumes:
@@ -76,10 +78,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1g
+          cpus: "2.0"
+          memory: 2g
         reservations:
-          cpus: "0.25"
+          cpus: "0.5"
           memory: 256m
     logging:
       driver: json-file
@@ -105,6 +107,7 @@ services:
   # any host port — it is only reachable from services on jiffy-internal.
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
+    container_name: docker-socket-proxy
     environment:
       # Container lifecycle (create, start, stop, remove, inspect, list)
       CONTAINERS: 1
@@ -137,11 +140,11 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "0.5"
+          memory: 512m
+        reservations:
           cpus: "0.25"
           memory: 128m
-        reservations:
-          cpus: "0.05"
-          memory: 32m
     logging:
       driver: json-file
       options:

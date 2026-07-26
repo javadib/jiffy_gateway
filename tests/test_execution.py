@@ -384,12 +384,33 @@ class InjectTokenIntoUrlTest(TestCase):
         self.assertEqual(result, "https://mytoken@github.com/user/repo.git")
 
     def test_https_with_port(self):
-        result = _inject_token_into_url("https://gitea.example.com:8443/user/repo.git", "tok")
-        self.assertEqual(result, "https://tok@gitea.example.com:8443/user/repo.git")
+        result = _inject_token_into_url("https://gitea.example.com:8443/user/repo.git", "tok", provider="gitea", username="myuser")
+        self.assertEqual(result, "https://myuser:tok@gitea.example.com:8443/user/repo.git")
 
     def test_ssh_url_unchanged(self):
         result = _inject_token_into_url("git@github.com:user/repo.git", "tok")
         self.assertEqual(result, "git@github.com:user/repo.git")
+
+    def test_gitlab_with_username(self):
+        result = _inject_token_into_url(
+            "https://gitlab.example.com/tanuki/awesome_project.git", "glpat-xxx",
+            provider="gitlab", username="tanuki",
+        )
+        self.assertEqual(result, "https://tanuki:glpat-xxx@gitlab.example.com/tanuki/awesome_project.git")
+
+    def test_gitea_with_username(self):
+        result = _inject_token_into_url(
+            "https://gitea.domain.org/test/test.git", "gta-token",
+            provider="gitea", username="testuser",
+        )
+        self.assertEqual(result, "https://testuser:gta-token@gitea.domain.org/test/test.git")
+
+    def test_gitea_without_username_falls_back_to_token_only(self):
+        result = _inject_token_into_url(
+            "https://gitea.domain.org/test/test.git", "tok",
+            provider="gitea", username="",
+        )
+        self.assertEqual(result, "https://tok@gitea.domain.org/test/test.git")
 
 
 # ---------------------------------------------------------------------------
