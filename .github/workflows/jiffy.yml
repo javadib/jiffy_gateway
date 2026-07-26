@@ -33,8 +33,6 @@ jobs:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.actor }}
-          ISSUE_TEXT: ${{ steps.thread.outputs.text }}
         run: |
           ISSUE_NUMBER=${{ github.event.issue.number }}
           REPO_URL="https://github.com/${{ github.repository }}.git"
@@ -43,8 +41,8 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg repo_url "$REPO_URL" \
             --arg repo_token "$REPO_TOKEN" \
-            --arg username "$ACTOR" \
-            --arg issue_text "$ISSUE_TEXT" \
+            --arg username "${{ github.actor }}" \
+            --arg issue_text "${{ steps.thread.outputs.text }}" \
             --arg issue_id "$ISSUE_NUMBER" \
             --arg callback_url "$CALLBACK_URL" \
             --arg callback_secret "$REPO_TOKEN" \
@@ -54,7 +52,15 @@ jobs:
               callback: {url:$callback_url, secret:$callback_secret}
             }')
 
-          curl -sf -X POST "$JIFFY_URL/api/github/ingestion" \
+          HTTP_CODE=$(curl -s -o /tmp/jiffy_response -w "%{http_code}" -X POST "$JIFFY_URL/api/github/ingestion" \
             -H "Content-Type: application/json" \
             -H "X-Jiffy-Token: $JIFFY_INGEST_TOKEN" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+
+          echo "HTTP Status: $HTTP_CODE"
+          cat /tmp/jiffy_response
+          echo ""
+
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            exit 1
+          fi
