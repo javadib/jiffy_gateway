@@ -1,5 +1,10 @@
 name: Jiffy Dispatch
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  
 on:
   issues:
     types: [opened]
