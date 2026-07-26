@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-07-21)
+
+### Features
+
+- Use serializer validation and store full payload in Redis
+  ([`b4f3793`](https://github.com/javadib/jiffy_gateway/commit/b4f3793afe8c7a0e35cdefcf0d1958a2dc6dfa37))
+
+
+## v1.0.1 (2026-07-20)
+
+### Bug Fixes
+
+- Resolve review feedback from @gemini-code-assist
+  ([`976c02e`](https://github.com/javadib/jiffy_gateway/commit/976c02eb581ffa7769c563478925295183a5f522))
+
+
+## v1.0.0 (2026-07-20)
+
+- Initial Release
+
 ## v1.1.1 (2026-07-14)
 
 ### Bug Fixes
