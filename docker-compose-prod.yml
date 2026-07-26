@@ -5,7 +5,8 @@ services:
       dockerfile: Dockerfile
       target: runner
     container_name: web
-    command: python manage.py runserver 0.0.0.0:8000
+    user: root
+    command: uv run python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
       - ./data:/app/data
@@ -49,7 +50,7 @@ services:
       dockerfile: Dockerfile
       target: runner
     container_name: celery
-    command: celery -A config worker -Q execute --concurrency=3 -l info -n execute@%h
+    command: uv run celery -A config worker -Q execute --concurrency=3 -l info -n execute@%h
     user: root
     volumes:
       - .:/app
