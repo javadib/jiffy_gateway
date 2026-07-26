@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
                 ('code_review_request', models.BooleanField(default=False)),
                 ('status', models.CharField(choices=[('queued', 'Queued'), ('extracting', 'Extracting requirements'), ('planning', 'Planning'), ('cloning', 'Cloning'), ('running', 'Running'), ('verifying', 'Verifying changes'), ('committing', 'Committing'), ('pushing', 'Pushing'), ('opening_pr', 'Opening PR'), ('reporting', 'Reporting'), ('done', 'Done'), ('failed', 'Failed')], default='queued', max_length=20)),
                 ('callback_url', models.URLField()),
-                ('callback_secret', models.CharField(max_length=128)),
+                ('callback_secret', models.CharField(max_length=256)),
                 ('pr_url', models.URLField(blank=True, null=True)),
                 ('error_message', models.TextField(blank=True, null=True)),
                 ('celery_task_id', models.CharField(blank=True, max_length=64, null=True)),
