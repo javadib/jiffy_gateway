@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-07-26)
+
+### Bug Fixes
+
+- Add --skip-ci option to semantic-release command
+  ([`79acecc`](https://github.com/javadib/jiffy_gateway/commit/79acecc96005baa98221c78c70c461f861422c43))
+
+- Update release workflow to use JIFFY_REPO_PAT and revert version to 1.2.0
+  ([`72f2903`](https://github.com/javadib/jiffy_gateway/commit/72f290347dc798c7007b89e60c8c2328e65b738e))
+
+- Update sandbox image version and change semantic-release command to skip build
+  ([`c9e0591`](https://github.com/javadib/jiffy_gateway/commit/c9e059189ab1bd92c9584d84723b8b104d6b206c))
+
+
 ## v1.2.0 (2026-07-21)
 
 ### Features
