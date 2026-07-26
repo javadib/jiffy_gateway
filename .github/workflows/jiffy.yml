@@ -23,7 +23,7 @@ jobs:
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
           ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
           script: |
@@ -44,7 +44,7 @@ jobs:
 
             const fullText = [issue.data.body || '', ...comments.map(c => c.body || '')].join(' --- ');
 
-            const repoToken = process.env.GITHUB_TOKEN || '${{ secrets.GITHUB_TOKEN }}';
+            const repoToken = process.env.REPO_TOKEN;
             const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
             const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
             //const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
