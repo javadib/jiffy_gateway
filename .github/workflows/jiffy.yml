@@ -14,11 +14,12 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@jiffy'))
     steps:
       - name: Collect thread and dispatch to Jiffy Gateway
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
           script: |
             const crypto = require('crypto');
