@@ -33,6 +33,8 @@ jobs:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          ISSUE_TEXT: ${{ steps.thread.outputs.text }}
         run: |
           ISSUE_NUMBER=${{ github.event.issue.number }}
           REPO_URL="https://github.com/${{ github.repository }}.git"
@@ -41,8 +43,8 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg repo_url "$REPO_URL" \
             --arg repo_token "$REPO_TOKEN" \
-            --arg username "${{ github.actor }}" \
-            --arg issue_text "${{ steps.thread.outputs.text }}" \
+            --arg username "$ACTOR" \
+            --arg issue_text "$ISSUE_TEXT" \
             --arg issue_id "$ISSUE_NUMBER" \
             --arg callback_url "$CALLBACK_URL" \
             --arg callback_secret "$REPO_TOKEN" \
