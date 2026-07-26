@@ -92,7 +92,7 @@ class Task(models.Model):
     branch_name = models.CharField(max_length=255, null=True, blank=True)  # populated from the agent's final result
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
     callback_url = models.URLField()
-    callback_secret = models.CharField(max_length=256)
+    callback_secret = models.CharField(max_length=1024)
     pr_url = models.URLField(null=True, blank=True)  # populated from the agent's final result, if it opened one
     error_message = models.TextField(null=True, blank=True)
     celery_task_id = models.CharField(max_length=64, null=True, blank=True)
