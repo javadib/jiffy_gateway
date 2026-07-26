@@ -13,48 +13,57 @@ jobs:
       (github.event_name == 'issues' && contains(github.event.issue.body, '@jiffy')) ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@jiffy'))
     steps:
-      - name: Collect full issue thread
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ISSUE_NUMBER=${{ github.event.issue.number }}
-          BODY=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER --jq '.body // ""')
-          COMMENTS=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments --paginate --jq '.[].body' | tr '\n' ' ')
-          printf '%s' "$BODY --- $COMMENTS" > /tmp/issue_text.txt
-
-      - name: Send to Jiffy Gateway
+      - name: Collect thread and dispatch to Jiffy Gateway
+        uses: actions/github-script@v7
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ISSUE_NUMBER=${{ github.event.issue.number }}
-          REPO_URL="https://github.com/${{ github.repository }}.git"
-          CALLBACK_URL="https://api.github.com/repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            const issueNumber = context.payload.issue.number;
 
-          PAYLOAD=$(jq -n \
-            --arg repo_url "$REPO_URL" \
-            --arg repo_token "$REPO_TOKEN" \
-            --arg username "${{ github.actor }}" \
-            --rawfile issue_text /tmp/issue_text.txt \
-            --arg issue_id "$ISSUE_NUMBER" \
-            --arg callback_url "$CALLBACK_URL" \
-            --arg callback_secret "$(echo -n "$REPO_TOKEN" | sha256sum | cut -d' ' -f1)" \
-            '{
-              repo: {url:$repo_url, token:$repo_token, username:$username},
-              issue: {text:$issue_text, external_issue_id:$issue_id},
-              callback: {url:$callback_url, secret:$callback_secret}
-            }')
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
 
-          HTTP_CODE=$(curl -s -o /tmp/jiffy_response -w "%{http_code}" -X POST "$JIFFY_URL/api/github/ingestion" \
-            -H "Content-Type: application/json" \
-            -H "X-Jiffy-Token: $JIFFY_INGEST_TOKEN" \
-            -d "$PAYLOAD")
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
 
-          echo "HTTP Status: $HTTP_CODE"
-          cat /tmp/jiffy_response
-          echo ""
+            const fullText = [issue.data.body || '', ...comments.map(c => c.body || '')].join(' --- ');
 
-          if [ "$HTTP_CODE" -ge 400 ]; then
-            exit 1
-          fi
+            const repoToken = process.env.GITHUB_TOKEN || '${{ secrets.GITHUB_TOKEN }}';
+            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
+            const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
+            const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
+
+            const payload = {
+              repo: { url: repoUrl, token: repoToken, username: context.actor },
+              issue: { text: fullText, external_issue_id: String(issueNumber) },
+              callback: { url: callbackUrl, secret: callbackSecret }
+            };
+
+            const response = await fetch(`${process.env.JIFFY_URL}/api/github/ingestion`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Jiffy-Token': process.env.JIFFY_INGEST_TOKEN
+              },
+              body: JSON.stringify(payload)
+            });
+
+            const responseText = await response.text();
+            console.log(`HTTP Status: ${response.status}`);
+            console.log(responseText);
+
+            if (response.status >= 400) {
+              core.setFailed(`Jiffy ingestion failed with status ${response.status}: ${responseText}`);
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
