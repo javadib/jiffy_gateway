@@ -14,6 +14,7 @@ from jobs.execution.agent import (
 from jobs.execution.container import (
     clone_repo_in_container,
     ensure_sandbox_image,
+    log_sandbox_startup,
     run_agent_in_container,
     start_generic_sandbox_container,
 )
@@ -115,6 +116,7 @@ def execute_task(self, task_id: int) -> None:
 
     repo_url = payload["repo"]["url"]
     repo_token = payload["repo"]["token"]
+    repo_username = payload["repo"].get("username", "")
     callback = payload["callback"]
     issue_id = payload.get("issue", {}).get("external_issue_id", "?")
     _task_log(
@@ -143,10 +145,16 @@ def execute_task(self, task_id: int) -> None:
         env_vars = {"REPO_TOKEN": repo_token}
 
         with start_generic_sandbox_container(task.id, env_vars, repo_url=repo_url) as container:
+            # Startup self-report (before cloning, so docker logs shows environment info)
+            log_sandbox_startup(container, task_id=task_id)
+
             # Cloning
             _update_status(task, "cloning")
             _task_log(task_id, logging.INFO, "Status → cloning", provider=task.provider)
-            clone_repo_in_container(container, repo_url, repo_token, task_id=task_id)
+            clone_repo_in_container(
+                container, repo_url, repo_token, task_id=task_id,
+                provider=task.provider, username=repo_username,
+            )
 
             # Running — agent does everything from here
             _update_status(task, "running")

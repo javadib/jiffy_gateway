@@ -100,7 +100,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": BASE_DIR / "data" / "db.sqlite3",
     }
 }
 
@@ -122,6 +122,10 @@ SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.1.0")
 SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
 SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
 SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", "")
+
+# Whether to stop and remove sandbox containers after each job.
+# Set to "false" to leave containers running for debugging.
+SANDBOX_CLEANUP = os.environ.get("JIFFY_SANDBOX_CLEANUP", "true").lower() in ("true", "1", "yes")
 
 # Network allow-list for sandbox containers (hostnames or CIDRs).
 # Containers can only reach hosts matching these entries.

@@ -137,17 +137,8 @@ def _extract_git_host(repo_url: str) -> str | None:
 
 
 def _build_network_config(repo_url: str) -> dict:
-    """Build Docker network configuration with an allow-list."""
-    host = _extract_git_host(repo_url)
-    allowlist: list[str] = list(settings.SANDBOX_NETWORK_ALLOWLIST)
-    if host and host not in allowlist:
-        allowlist.append(host)
-
-    extra_hosts = {h: h for h in allowlist if "/" not in h}
-
-    return {
-        "extra_hosts": extra_hosts,
-    }
+    """Build Docker network configuration for the sandbox container."""
+    return {}
 
 
 def _ensure_network(client: docker.DockerClient) -> str:
@@ -166,6 +157,91 @@ def _ensure_network(client: docker.DockerClient) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Startup self-report
+# ---------------------------------------------------------------------------
+
+_STARTUP_REPORT_SCRIPT = """\
+echo ''
+echo '==========================================='
+echo '   Jiffy Sandbox Container - Startup Report'
+echo '==========================================='
+echo ''
+echo '-- Runtime Versions --'
+echo -n '  Python  : '; python3 --version 2>&1 || echo 'not found'
+echo -n '  Node.js : '; node --version 2>&1 || echo 'not found'
+echo -n '  npm     : '; npm --version 2>&1 || echo 'not found'
+echo -n '  Go      : '; go version 2>&1 || echo 'not found'
+echo ''
+echo '-- Tools --'
+echo -n '  git     : '; git --version 2>&1 || echo 'not found'
+echo -n '  curl    : '; curl --version 2>&1 | head -1 || echo 'not found'
+echo -n '  gcc     : '; gcc --version 2>&1 | head -1 || echo 'not found'
+echo -n '  make    : '; make --version 2>&1 | head -1 || echo 'not found'
+echo -n '  uv      : '; uv --version 2>&1 || echo 'not found'
+echo -n '  gh      : '; gh --version 2>&1 | head -1 || echo 'not found'
+echo ''
+echo '-- Coding Agent --'
+echo -n '  opencode: '; opencode --version 2>&1 || echo 'not found'
+echo -n '  model   : '
+python3 -c "
+import sys, json
+try:
+    c = json.load(open('/home/jiffy/.config/opencode/opencode.json'))
+    m = c.get('model') or ''
+    if not m and isinstance(c.get('provider'), dict):
+        m = c['provider'].get('model', '')
+    print(m or 'unknown')
+except Exception:
+    print('unknown')
+" 2>&1
+echo ''
+echo '-- Environment --'
+echo -n '  user    : '; whoami 2>&1 || echo 'unknown'
+echo -n '  workdir : '; ls -la /workspace 2>&1 | head -1 || echo '/workspace not present'
+echo -n '  hostname: '; hostname 2>&1 || echo 'unknown'
+echo ''
+echo '-- Network --'
+(echo -n '  pypi.org : '; curl -sI --max-time 3 https://pypi.org 2>&1 | head -1 || echo 'unreachable')
+(echo -n '  npmjs.org: '; curl -sI --max-time 3 https://registry.npmjs.org 2>&1 | head -1 || echo 'unreachable')
+(echo -n '  github.com: '; curl -sI --max-time 3 https://github.com 2>&1 | head -1 || echo 'unreachable')
+echo '==========================================='
+echo ''
+"""
+
+
+def log_sandbox_startup(container: Container, task_id: int = 0) -> None:
+    """Run the startup self-report inside the container.
+
+    Prints a structured summary of installed tools/runtimes, the coding agent
+    model, and environment info to the container's stdout (captured by Docker's
+    logging driver) and to the host-side logger.
+    """
+    model = _get_opencode_model(container)
+    logger.info("[%d] Running sandbox startup self-report (model=%s)", task_id, model)
+
+    exit_code, (output, _) = container.exec_run(
+        cmd=["bash", "-l", "-c", _STARTUP_REPORT_SCRIPT],
+        demux=True,
+    )
+
+    report = (output or b"").decode(errors="replace")
+
+    if exit_code != 0:
+        logger.warning("[%d] Startup report script exited with code %d:\n%s", task_id, exit_code, report.strip())
+
+    logger.info("[%d] Startup self-report generated", task_id)
+
+    # Write the captured output to the container's main stdout so docker logs
+    # captures the full report.
+    if report.strip():
+        escaped = report.replace("\\", "\\\\").replace("'", "'\\''")
+        container.exec_run(
+            cmd=["bash", "-c", "printf '%s' '" + escaped + "' > /proc/1/fd/1"],
+            demux=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Config injection
 # ---------------------------------------------------------------------------
 
@@ -179,16 +255,13 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
     Docker (the Docker daemon needs host-accessible paths, but the config
     file is only accessible inside the Celery container).
     """
-    opencode_config = getattr(settings, "SANDBOX_OPENCODE_CONFIG_PATH", "")
-    if not opencode_config:
-        return
-
-    config_path = Path(opencode_config)
+    # Read opencode.json from the project root
+    config_path = Path(__file__).resolve().parent.parent.parent / "opencode.json"
     if not config_path.is_file():
         logger.warning(
-            "[%d] SANDBOX_OPENCODE_CONFIG_PATH set but file not found: %s",
+            "[%d] opencode.json not found in project root: %s",
             task_id,
-            opencode_config,
+            config_path,
         )
         return
 
@@ -197,6 +270,9 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
         # Write config into the container using printf + heredoc to avoid escaping issues
         escaped = config_content.replace("\\", "\\\\").replace("'", "'\\''")
         write_cmd = f"printf '%s' '{escaped}' > {SANDBOX_OPENCODE_CONFIG_PATH_IN_CONTAINER}"
+
+        logger.info(f"[%d] OpenCode config: %s", task_id, write_cmd)
+
         exit_code, (_, err) = container.exec_run(
             cmd=["bash", "-c", write_cmd],
             demux=True,
@@ -269,17 +345,23 @@ def start_generic_sandbox_container(
         logger.exception("[%d] Failed to start sandbox container", task_id)
         raise ContainerError(f"Failed to start container: {e}")
     finally:
-        pass
-        # if container:
-        #     try:
-        #         container.stop(timeout=5)
-        #     except (NotFound, Exception):
-        #         pass
-        #     try:
-        #         container.remove(force=True)
-        #         logger.info("[%d] Container %s removed (id=%s)", task_id, container.short_id, container.id[:12])
-        #     except (NotFound, Exception):
-        #         pass
+        if container:
+            if settings.SANDBOX_CLEANUP:
+                try:
+                    container.stop(timeout=5)
+                except (NotFound, Exception):
+                    pass
+                try:
+                    container.remove(force=True)
+                    logger.info("[%d] Container %s removed (id=%s)", task_id, container.short_id, container.id[:12])
+                except (NotFound, Exception):
+                    pass
+            else:
+                logger.info(
+                    "[%d] Container %s cleanup skipped (JIFFY_SANDBOX_CLEANUP=false)",
+                    task_id,
+                    container.short_id,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -287,15 +369,22 @@ def start_generic_sandbox_container(
 # ---------------------------------------------------------------------------
 
 
-def _inject_token_into_url(url: str, token: str) -> str:
+def _inject_token_into_url(url: str, token: str, provider: str = "github", username: str = "") -> str:
     """Inject a token into a git URL for authentication.
 
-    Converts https://github.com/user/repo.git to
-    https://TOKEN@github.com/user/repo.git
+    Provider-specific formats:
+    - GitHub:  https://TOKEN@github.com/user/repo.git
+    - GitLab:  https://USERNAME:TOKEN@gitlab.example.com/user/repo.git
+    - Gitea:   https://USERNAME:TOKEN@gitea.example.com/user/repo.git
     """
     parsed = urlparse(url)
     if parsed.scheme in ("http", "https") and parsed.hostname:
-        authenticated = f"{parsed.scheme}://{token}@{parsed.hostname}"
+        # GitLab and Gitea require username:token format
+        if provider in ("gitlab", "gitea") and username:
+            userinfo = f"{username}:{token}"
+        else:
+            userinfo = token
+        authenticated = f"{parsed.scheme}://{userinfo}@{parsed.hostname}"
         if parsed.port:
             authenticated += f":{parsed.port}"
         authenticated += parsed.path
@@ -315,12 +404,17 @@ def _redact_url(url: str) -> str:
 
 
 def clone_repo_in_container(
-        container: Container, repo_url: str, token: str, task_id: int = 0
+        container: Container,
+        repo_url: str,
+        token: str,
+        task_id: int = 0,
+        provider: str = "github",
+        username: str = "",
 ) -> None:
     """Clone the repository into the container's workspace directory."""
     logger.info("[%d] Cloning %s into container %s", task_id, _redact_url(repo_url), container.short_id)
 
-    authenticated_url = _inject_token_into_url(repo_url, token)
+    authenticated_url = _inject_token_into_url(repo_url, token, provider=provider, username=username)
 
     exit_code, (output, err) = container.exec_run(
         cmd=["git", "clone", authenticated_url, WORKSPACE],
@@ -388,9 +482,11 @@ def run_agent_in_container(
 
     # Read instructions from file and pass to opencode
     # Use login shell (-l) so .profile is sourced and all tools (nvm, uv, etc.) are available
+    # Redirect agent stdout/stderr to the container's main stdout so docker logs
+    # shows real-time output; exit code remains captured via exec_run return value.
     run_cmd = (
         'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
-        'opencode run --auto "$INSTRUCTIONS"'
+        'opencode run --auto "$INSTRUCTIONS" > /proc/1/fd/1 2>&1'
     )
     exit_code, (output, err) = container.exec_run(
         cmd=["bash", "-l", "-c", run_cmd],
@@ -398,8 +494,7 @@ def run_agent_in_container(
         workdir=WORKSPACE,
     )
     if exit_code != 0:
-        error_text = (err or b"").decode(errors="replace")
         raise ContainerError(
-            f"Agent exited with code {exit_code}: {error_text}"
+            f"Agent exited with code {exit_code}"
         )
     logger.info("[%d] Agent finished in container %s (exit 0)", task_id, container.short_id)
