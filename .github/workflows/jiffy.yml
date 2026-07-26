@@ -45,6 +45,8 @@ jobs:
             //const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
             const callbackSecret = repoToken;
 
+            console.log(`callbackSecret: ${callbackSecret}`)
+
             const payload = {
               repo: { url: repoUrl, token: repoToken, username: context.actor },
               issue: { text: fullText, external_issue_id: String(issueNumber) },
