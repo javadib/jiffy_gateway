@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-07-26)
+
+### Bug Fixes
+
+- Ensure data directory is created before collecting static files
+  ([`6f20004`](https://github.com/javadib/jiffy_gateway/commit/6f200044412e01b868e2b753386a68590a6c314d))
+
+- Remove unnecessary directory creation in Dockerfile
+  ([`becd22d`](https://github.com/javadib/jiffy_gateway/commit/becd22d500d4290c5133b9be3351c0394af769dd))
+
+- Update Jiffy Dispatch workflow and increase callback secret length
+  ([`478be34`](https://github.com/javadib/jiffy_gateway/commit/478be3433da85ed1a70ca4e28369a58a8450ff9c))
+
+### Features
+
+- Add Jiffy Dispatch workflow for issue handling and ingestion
+  ([`69d6094`](https://github.com/javadib/jiffy_gateway/commit/69d60943ed2c7b8e809450b9b0dd01a0bdd04729))
+
+- Increase max length of callback_secret to 1024 in Task model and serializers
+  ([`80405f4`](https://github.com/javadib/jiffy_gateway/commit/80405f435753e6b613be903a4648c955e3a5326a))
+
+- Update callback handling to pass secret as opaque value and increase callback_secret length
+  ([`95463af`](https://github.com/javadib/jiffy_gateway/commit/95463af275e4afc02081972938f0592f3d1d4161))
+
+- Update Docker commands to use 'uv run' and add migration for callback_url field
+  ([`b461df6`](https://github.com/javadib/jiffy_gateway/commit/b461df636ed4fd7974617827a977429b3d45f859))
+
+### Refactoring
+
+- Comment out unused network configuration in sandbox container setup
+  ([`461d5ad`](https://github.com/javadib/jiffy_gateway/commit/461d5ada2181f46815ba20b47dcefe0e9725549d))
+
+
 ## v1.3.2 (2026-07-26)
 
 ### Bug Fixes
