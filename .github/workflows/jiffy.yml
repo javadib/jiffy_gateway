@@ -41,7 +41,8 @@ jobs:
             const repoToken = process.env.GITHUB_TOKEN || '${{ secrets.GITHUB_TOKEN }}';
             const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
             const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
-            const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
+            # const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
+            const callbackSecret = repoToken;
 
             const payload = {
               repo: { url: repoUrl, token: repoToken, username: context.actor },
