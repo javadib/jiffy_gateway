@@ -42,22 +42,43 @@ RUN mkdir -p "$NVM_DIR" \
 RUN printf 'export NVM_DIR="%s"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\n' "$NVM_DIR" \
     > /etc/profile.d/nvm.sh
 
+# --- Node.js 24 via nvm ---
+RUN bash -c '. /etc/profile.d/nvm.sh \
+    && nvm install 24 \
+    && nvm alias default 24 \
+    && NODE_BIN_DIR="$(dirname "$(nvm which 24)")" \
+    && ln -sf "$NODE_BIN_DIR/node" /usr/local/bin/node \
+    && ln -sf "$NODE_BIN_DIR/npm" /usr/local/bin/npm \
+    && ln -sf "$NODE_BIN_DIR/npx" /usr/local/bin/npx'
+
 # --- uv (Python package/version manager) ---
 # Installed to /usr/local/bin — available to all users without sourcing.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# --- Python 3.12 via uv ---
+RUN uv python install 3.12 \
+    && ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 \
+    && ln -sf /usr/local/bin/python3 /usr/local/bin/python
+
 # --- gvm (Go Version Manager) ---
-#ENV GVM_DIR=/usr/local/gvm
-#RUN mkdir -p "$GVM_DIR" \
-#    && git clone https://github.com/moovweb/gvm.git "$GVM_DIR" \
-#    && chmod +x "$GVM_DIR/bin/gvm"
+ENV GVM_DIR=/usr/local/gvm
+RUN mkdir -p "$GVM_DIR" \
+    && git clone --depth 1 https://github.com/moovweb/gvm.git "$GVM_DIR" \
+    && chmod +x "$GVM_DIR/bin/gvm"
 
 # Make gvm available in non-interactive shells via /etc/profile.d
-#RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
-#    > /etc/profile.d/gvm.sh
+RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
+    > /etc/profile.d/gvm.sh
 
-# Allow jiffy user to write GVM version directories and symlinks
-#RUN chown -R root:jiffy "$GVM_DIR" && chmod -R g+w "$GVM_DIR"
+# --- Go (latest via gvm) ---
+RUN bash -c '. /etc/profile.d/gvm.sh \
+    && GO_VERSION=$(gvm listall | grep -E "^go1\.[0-9]+(\.[0-9]+)?$" | sort -V | tail -1) \
+    && gvm install "$GO_VERSION" -B \
+    && gvm use "$GO_VERSION" --default \
+    && GO_PATH=$(command -v go) \
+    && GOFMT_PATH=$(command -v gofmt) \
+    && ln -sf "$GO_PATH" /usr/local/bin/go \
+    && ln -sf "$GOFMT_PATH" /usr/local/bin/gofmt'
 
 # 3. Git provider CLIs — pinned versions
 
@@ -128,6 +149,14 @@ export PATH="/usr/local/bin:$PATH"\n\
 RUN mkdir -p /home/jiffy/.config/opencode \
     && echo '{}' > /home/jiffy/.config/opencode/opencode.json \
     && chown -R jiffy:jiffy /home/jiffy/.config
+
+# 7. Verify language runtimes are globally available in a non-interactive shell
+RUN echo "=== Language Runtime Verification ===" \
+    && python3 --version \
+    && node --version \
+    && npm --version \
+    && go version \
+    && echo "=== All runtimes verified ==="
 
 USER jiffy
 WORKDIR /workspace
