@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.3.1 (2026-07-26)
+
+### Bug Fixes
+
+- Update Docker publish workflow to use JIFFY_REPO_PAT for authentication
+  ([`d1e7e23`](https://github.com/javadib/jiffy_gateway/commit/d1e7e23aeaa05ce944a2d5a972ab1870a900c3c9))
+
+
 ## v1.3.0 (2026-07-26)
 
 ### Bug Fixes
