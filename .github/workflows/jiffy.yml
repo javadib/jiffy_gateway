@@ -39,7 +39,7 @@ jobs:
             --rawfile issue_text /tmp/issue_text.txt \
             --arg issue_id "$ISSUE_NUMBER" \
             --arg callback_url "$CALLBACK_URL" \
-            --arg callback_secret "$REPO_TOKEN" \
+            --arg callback_secret "$(echo -n "$REPO_TOKEN" | sha256sum | cut -d' ' -f1)" \
             '{
               repo: {url:$repo_url, token:$repo_token, username:$username},
               issue: {text:$issue_text, external_issue_id:$issue_id},
