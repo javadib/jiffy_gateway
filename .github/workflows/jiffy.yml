@@ -14,19 +14,13 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@jiffy'))
     steps:
       - name: Collect full issue thread
-        id: thread
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_NUMBER=${{ github.event.issue.number }}
           BODY=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER --jq '.body // ""')
           COMMENTS=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments --paginate --jq '.[].body' | tr '\n' ' ')
-          FULL_TEXT="$BODY --- $COMMENTS"
-          {
-            echo 'text<<EOF'
-            echo "$FULL_TEXT"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          printf '%s' "$BODY --- $COMMENTS" > /tmp/issue_text.txt
 
       - name: Send to Jiffy Gateway
         env:
@@ -42,7 +36,7 @@ jobs:
             --arg repo_url "$REPO_URL" \
             --arg repo_token "$REPO_TOKEN" \
             --arg username "${{ github.actor }}" \
-            --arg issue_text "${{ steps.thread.outputs.text }}" \
+            --rawfile issue_text /tmp/issue_text.txt \
             --arg issue_id "$ISSUE_NUMBER" \
             --arg callback_url "$CALLBACK_URL" \
             --arg callback_secret "$REPO_TOKEN" \
