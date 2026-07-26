@@ -42,7 +42,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          semantic-release version --changelog --push --skip-ci
+          semantic-release version --changelog --push --skip-build
           NEW_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -n "$NEW_TAG" ]; then
             semantic-release changelog --post-to-release-tag "$NEW_TAG"
