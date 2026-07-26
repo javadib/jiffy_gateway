@@ -14,6 +14,7 @@ from jobs.execution.container import (
     _redact_url,
     ensure_sandbox_image,
     get_docker_client,
+    log_sandbox_startup,
 )
 from jobs.execution.exceptions import AgentError, ContainerError
 from jobs.models import Task
@@ -164,6 +165,75 @@ class ReadAgentResultTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
+# log_sandbox_startup
+# ---------------------------------------------------------------------------
+
+
+class LogSandboxStartupTest(TestCase):
+    """Tests for log_sandbox_startup."""
+
+    def test_runs_script_inside_container(self):
+        container = MagicMock()
+        # First call is from _get_opencode_model (model lookup); second is the actual script
+        # Script output is truthy, so a third call writes to /proc/1/fd/1
+        container.exec_run.side_effect = [
+            (0, (b'{"model": "test-model"}', b"")),
+            (0, (b"output", b"")),
+            (0, (b"", b"")),
+        ]
+
+        log_sandbox_startup(container, task_id=42)
+
+        self.assertEqual(container.exec_run.call_count, 3)
+        _, kwargs = container.exec_run.call_args_list[1]
+        cmd = kwargs["cmd"]
+        self.assertIn("bash", cmd)
+        self.assertIn("-l", cmd)
+
+    def test_writes_output_to_proc_1_fd_1(self):
+        container = MagicMock()
+        container.exec_run.side_effect = [
+            (0, (b'{"model": "test-model"}', b"")),
+            (0, (b"report content here", b"")),
+            (0, (b"", b"")),
+        ]
+
+        log_sandbox_startup(container, task_id=42)
+
+        self.assertEqual(container.exec_run.call_count, 3)
+        _, kwargs = container.exec_run.call_args_list[2]
+        cmd_str = " ".join(kwargs["cmd"])
+        self.assertIn("/proc/1/fd/1", cmd_str)
+
+    def test_skips_write_when_output_empty(self):
+        container = MagicMock()
+        container.exec_run.side_effect = [
+            (0, (b'{"model": "test-model"}', b"")),
+            (0, (b"", b"")),
+        ]
+
+        log_sandbox_startup(container, task_id=42)
+
+        self.assertEqual(container.exec_run.call_count, 2)
+
+    def test_logs_warning_on_script_failure(self):
+        container = MagicMock()
+        # Script fails (exit 1) but still produces output → write to /proc/1/fd/1 is also called
+        container.exec_run.side_effect = [
+            (0, (b'{"model": "test-model"}', b"")),
+            (1, (b"error happened", b"")),
+            (0, (b"", b"")),
+        ]
+
+        with self.assertLogs("jobs.execution.container", level="WARNING") as cm:
+            log_sandbox_startup(container, task_id=42)
+
+        self.assertTrue(
+            any("Startup report script exited with code 1" in m for m in cm.output),
+        )
+
+
+# ---------------------------------------------------------------------------
 # execute_task orchestration (all Docker/agent calls mocked)
 # ---------------------------------------------------------------------------
 
@@ -211,9 +281,10 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_happy_path(
-        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         task = self._create_task()
         mock_load.return_value = self._make_payload()
@@ -238,9 +309,10 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_failed_agent_result_short_circuits(
-        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """A failed agent result must NOT update branch_name, pr_url, or programming_language."""
         task = self._create_task()
@@ -290,9 +362,10 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.ensure_sandbox_image")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_clone_failure_fails_task(
-        self, mock_load, mock_container, mock_clone, mock_ensure, mock_cb
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_ensure, mock_cb
     ):
         task = self._create_task()
         mock_load.return_value = self._make_payload()
@@ -324,9 +397,10 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_status_transitions(
-        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Verify the full status transition sequence on success."""
         task = self._create_task()
@@ -621,9 +695,10 @@ class ExecuteTaskLoggingTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_log_output_is_ordered_and_readable(
-        self, mock_load, mock_container, mock_clone, mock_run,
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run,
         mock_result, mock_ensure, mock_cb,
     ):
         task = self._create_task()
@@ -676,9 +751,10 @@ class ExecuteTaskLoggingTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_token_never_appears_in_logs(
-        self, mock_load, mock_container, mock_clone, mock_run,
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run,
         mock_result, mock_ensure, mock_cb,
     ):
         secret_token = "ghp_SUPERTOKEN_12345"
@@ -740,9 +816,10 @@ class ExecuteTaskLoggingTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_provider_in_every_log_line(
-        self, mock_load, mock_container, mock_clone, mock_run,
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run,
         mock_result, mock_ensure, mock_cb,
     ):
         """Every log line for a task must include the provider tag."""
@@ -778,9 +855,10 @@ class ExecuteTaskLoggingTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_failed_agent_result_logs_warning(
-        self, mock_load, mock_container, mock_clone, mock_run,
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run,
         mock_result, mock_ensure, mock_cb,
     ):
         """A failed agent result should log at WARNING, not INFO."""
@@ -814,9 +892,10 @@ class ExecuteTaskLoggingTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
+    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_callback_secret_never_in_logs(
-        self, mock_load, mock_container, mock_clone, mock_run,
+        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run,
         mock_result, mock_ensure, mock_cb,
     ):
         """The callback secret must never appear in log output."""
