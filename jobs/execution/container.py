@@ -260,17 +260,23 @@ def start_generic_sandbox_container(
         logger.exception("[%d] Failed to start sandbox container", task_id)
         raise ContainerError(f"Failed to start container: {e}")
     finally:
-        pass
-        # if container:
-        #     try:
-        #         container.stop(timeout=5)
-        #     except (NotFound, Exception):
-        #         pass
-        #     try:
-        #         container.remove(force=True)
-        #         logger.info("[%d] Container %s removed (id=%s)", task_id, container.short_id, container.id[:12])
-        #     except (NotFound, Exception):
-        #         pass
+        if container:
+            if settings.SANDBOX_CLEANUP:
+                try:
+                    container.stop(timeout=5)
+                except (NotFound, Exception):
+                    pass
+                try:
+                    container.remove(force=True)
+                    logger.info("[%d] Container %s removed (id=%s)", task_id, container.short_id, container.id[:12])
+                except (NotFound, Exception):
+                    pass
+            else:
+                logger.info(
+                    "[%d] Container %s cleanup skipped (JIFFY_SANDBOX_CLEANUP=false)",
+                    task_id,
+                    container.short_id,
+                )
 
 
 # ---------------------------------------------------------------------------
