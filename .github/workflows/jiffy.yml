@@ -32,7 +32,7 @@ jobs:
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
-          REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_NUMBER=${{ github.event.issue.number }}
           REPO_URL="https://github.com/${{ github.repository }}.git"
@@ -52,7 +52,7 @@ jobs:
               callback: {url:$callback_url, secret:$callback_secret}
             }')
 
-          curl -sf -X POST "$JIFFY_URL/github/ingestion" \
+          curl -sf -X POST "$JIFFY_URL/api/github/ingestion" \
             -H "Content-Type: application/json" \
             -H "X-Jiffy-Token: $JIFFY_INGEST_TOKEN" \
             -d "$PAYLOAD"
