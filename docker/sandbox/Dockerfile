@@ -51,12 +51,14 @@ RUN bash -c '. /etc/profile.d/nvm.sh \
     && ln -sf "$NODE_BIN_DIR/npm" /usr/local/bin/npm \
     && ln -sf "$NODE_BIN_DIR/npx" /usr/local/bin/npx'
 
-# --- uv (Python package/version manager) ---
-# Installed to /usr/local/bin — available to all users without sourcing.
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN node --version && npm --version
 
-# --- Python 3.12 via uv ---
-RUN uv python install 3.12 \
+# --- uv (Python package/version manager) ---
+# Installed to $HOME/.local/bin by default; add to PATH explicitly.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+RUN uv --version \
+    && uv python install 3.12 \
     && ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 \
     && ln -sf /usr/local/bin/python3 /usr/local/bin/python
 
@@ -79,6 +81,8 @@ RUN bash -c '. /etc/profile.d/gvm.sh \
     && GOFMT_PATH=$(command -v gofmt) \
     && ln -sf "$GO_PATH" /usr/local/bin/go \
     && ln -sf "$GOFMT_PATH" /usr/local/bin/gofmt'
+
+RUN go version
 
 # 3. Git provider CLIs — pinned versions
 
