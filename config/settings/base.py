@@ -123,6 +123,10 @@ SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
 SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
 SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", "")
 
+# Whether to stop and remove sandbox containers after each job.
+# Set to "false" to leave containers running for debugging.
+SANDBOX_CLEANUP = os.environ.get("JIFFY_SANDBOX_CLEANUP", "true").lower() in ("true", "1", "yes")
+
 # Network allow-list for sandbox containers (hostnames or CIDRs).
 # Containers can only reach hosts matching these entries.
 # At minimum, include the package registries for Python/Node/Go plus the
