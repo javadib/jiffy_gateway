@@ -152,7 +152,7 @@ export PATH="/usr/local/bin:$PATH"\n\
 #      docker run -v /host/path/to/opencode.json:/home/jiffy/.config/opencode/opencode.json:ro ...
 #    The placeholder ensures OpenCode works even if no external config is mounted.
 RUN mkdir -p /home/jiffy/.config/opencode \
-    && echo '{}' > /home/jiffy/.config/opencode/opencode.json \
+    && echo '{"$schema": "https://opencode.ai/config.json"}' > /home/jiffy/.config/opencode/opencode.json \
     && chown -R jiffy:jiffy /home/jiffy/.config
 
 # 7. Verify language runtimes are globally available in a non-interactive shell

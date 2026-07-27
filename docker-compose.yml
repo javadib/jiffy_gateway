@@ -176,7 +176,7 @@ services:
     volumes:
       - .:/workspace:ro
       - ./docker/sandbox/smoke-test.sh:/smoke-test.sh:ro
-      - ./docker/sandbox/opencode.json:/home/jiffy/.config/opencode/opencode.json:ro
+      - ./opencode.json:/home/jiffy/.config/opencode/opencode.json:ro
     networks:
       - jiffy-internal
     deploy:
