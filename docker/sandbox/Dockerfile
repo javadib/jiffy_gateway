@@ -163,10 +163,12 @@ RUN echo "=== Language Runtime Verification ===" \
     && go version \
     && echo "=== All runtimes verified ==="
 
+# 8. Startup report script — runs on every container start
+COPY startup-report.sh /usr/local/bin/startup-report.sh
+RUN chmod +x /usr/local/bin/startup-report.sh
+
 USER jiffy
 WORKDIR /workspace
 
-# Keep the container alive so exec_run can issue commands into it.
-# bash -c 'while true; do sleep 1d; done' is more portable than tail -f /dev/null
-# and avoids issues on minimal images that lack tail.
-CMD ["bash", "-c", "while true; do sleep 86400; done"]
+# Print startup report on container start, then keep alive for exec_run.
+CMD ["bash", "-c", "/usr/local/bin/startup-report.sh; while true; do sleep 86400; done"]
