@@ -66,10 +66,10 @@ RUN uv --version \
     && ln -sf /usr/local/bin/python3 /usr/local/bin/python
 
 # --- gvm (Go Version Manager) ---
+# The official installer clones the repo AND generates scripts/gvm from scripts/gvm.in
 ENV GVM_DIR=/usr/local/gvm
-RUN mkdir -p "$GVM_DIR" \
-    && git clone --depth 1 https://github.com/moovweb/gvm.git "$GVM_DIR" \
-    && chmod +x "$GVM_DIR/bin/gvm"
+RUN curl -fsSL https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer \
+    | GVM_DIR="$GVM_DIR" bash
 
 # Make gvm available in non-interactive shells via /etc/profile.d
 RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
