@@ -1,4 +1,33 @@
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /app/data && uv run python manage.py migrate --noinput"]
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - jiffy-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   web:
     build:
       context: .
@@ -14,6 +43,8 @@ services:
     env_file:
       - .env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -58,6 +89,8 @@ services:
       # file (opencode.json) is at /app/opencode.json inside this container.
       SANDBOX_OPENCODE_CONFIG_PATH: /app/opencode.json
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       docker-socket-proxy:

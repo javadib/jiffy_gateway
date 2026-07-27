@@ -1,4 +1,44 @@
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: migrate
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sh", "-c", "mkdir -p /app/data && uv run python manage.py migrate --noinput"]
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      X_JIFFY_TOKEN: ${X_JIFFY_TOKEN}
+      GITHUB_INGEST_TOKEN: ${GITHUB_INGEST_TOKEN}
+      GITLAB_INGEST_TOKEN: ${GITLAB_INGEST_TOKEN}
+      GITEA_INGEST_TOKEN: ${GITEA_INGEST_TOKEN}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - jiffy-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   web:
     build:
       context: .
@@ -26,6 +66,8 @@ services:
       GITEA_INGEST_TOKEN: ${GITEA_INGEST_TOKEN}
       SANDBOX_OPENCODE_CONFIG_PATH: ${SANDBOX_OPENCODE_CONFIG_PATH}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -70,6 +112,8 @@ services:
       GITEA_INGEST_TOKEN: ${GITEA_INGEST_TOKEN}
       SANDBOX_OPENCODE_CONFIG_PATH: ${SANDBOX_OPENCODE_CONFIG_PATH}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       docker-socket-proxy:
