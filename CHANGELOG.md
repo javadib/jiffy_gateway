@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-07-27)
+
+### Bug Fixes
+
+- Update callback URL assertion in tests and remove unnecessary log startup patch
+  ([`a4d5f20`](https://github.com/javadib/jiffy_gateway/commit/a4d5f20cb7df16502f1afd02589c162b6bd0b76a))
+
+- Update request headers in tests to align with new header structure and bump version to 1.4.0
+  ([`d16589e`](https://github.com/javadib/jiffy_gateway/commit/d16589eb82fffd3ff7258450b252f464aadfdbbf))
+
+
 ## v1.4.0 (2026-07-26)
 
 ### Bug Fixes
