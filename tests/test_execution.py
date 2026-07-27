@@ -58,6 +58,7 @@ class BuildAgentInstructionsTest(TestCase):
         self.assertIn("status", instructions)
         self.assertIn("branch_name", instructions)
         self.assertIn("summary", instructions)
+        self.assertIn("technical_report", instructions)
 
     def test_mentions_branch_fallback(self):
         instructions = build_agent_instructions(self._make_payload())
@@ -93,6 +94,18 @@ class BuildAgentInstructionsTest(TestCase):
         self.assertIn("attempted", instructions)
         self.assertIn("succeeded", instructions)
 
+    def test_includes_technical_report_in_output_contract(self):
+        instructions = build_agent_instructions(self._make_payload())
+        self.assertIn("technical_report", instructions)
+
+    def test_mentions_technical_report_structure(self):
+        instructions = build_agent_instructions(self._make_payload())
+        self.assertIn("Technical Report", instructions)
+        self.assertIn("What was done", instructions)
+        self.assertIn("Technology / approach chosen", instructions)
+        self.assertIn("Reasoning", instructions)
+        self.assertIn("Known limitations / follow-ups", instructions)
+
 
 # ---------------------------------------------------------------------------
 # read_agent_result
@@ -115,6 +128,7 @@ class ReadAgentResultTest(TestCase):
             "pr_url": "https://github.com/user/repo/pull/42",
             "programming_language": "python",
             "summary": "Fixed the bug.",
+            "technical_report": "## What was done\nFixed the bug.",
             "error_message": None,
             "callback": {"attempted": True, "succeeded": True, "error": None},
         }
@@ -126,6 +140,7 @@ class ReadAgentResultTest(TestCase):
         self.assertEqual(result.pr_url, "https://github.com/user/repo/pull/42")
         self.assertEqual(result.programming_language, "python")
         self.assertEqual(result.summary, "Fixed the bug.")
+        self.assertEqual(result.technical_report, "## What was done\nFixed the bug.")
         self.assertIsNone(result.error_message)
         self.assertEqual(result.callback, {"attempted": True, "succeeded": True, "error": None})
 
@@ -136,6 +151,7 @@ class ReadAgentResultTest(TestCase):
             "pr_url": None,
             "programming_language": None,
             "summary": None,
+            "technical_report": None,
             "error_message": "Could not install dependency X.",
             "callback": {"attempted": True, "succeeded": False, "error": "HTTP 500"},
         }
@@ -145,6 +161,7 @@ class ReadAgentResultTest(TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.error_message, "Could not install dependency X.")
         self.assertEqual(result.callback, {"attempted": True, "succeeded": False, "error": "HTTP 500"})
+        self.assertIsNone(result.technical_report)
 
     def test_missing_result_file(self):
         container = self._make_container(exit_code=1, output=None)
@@ -238,8 +255,37 @@ class ReadAgentResultTest(TestCase):
         self.assertFalse(result.callback["succeeded"])
         self.assertEqual(result.callback["error"], "Connection refused")
 
+    def test_technical_report_parsed_when_present(self):
+        """technical_report is correctly parsed from agent JSON."""
+        result_data = {
+            "status": "done",
+            "branch_name": "Jiffy/fix",
+            "pr_url": None,
+            "programming_language": "python",
+            "summary": "Fixed the bug.",
+            "technical_report": "## What was done\nChanged X.\n\n## Reasoning\nBecause Y.",
+            "error_message": None,
+        }
+        container = self._make_container(output=json.dumps(result_data).encode())
+        result = read_agent_result(container)
 
+        self.assertEqual(result.status, "done")
+        self.assertEqual(result.technical_report, "## What was done\nChanged X.\n\n## Reasoning\nBecause Y.")
 
+    def test_technical_report_missing_returns_none(self):
+        """If technical_report is missing from JSON, it should be None."""
+        result_data = {
+            "status": "done",
+            "branch_name": "Jiffy/fix",
+            "pr_url": None,
+            "programming_language": "python",
+            "summary": "Fixed the bug.",
+        }
+        container = self._make_container(output=json.dumps(result_data).encode())
+        result = read_agent_result(container)
+
+        self.assertEqual(result.status, "done")
+        self.assertIsNone(result.technical_report)
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +324,7 @@ class ExecuteTaskTest(TestCase):
             "pr_url": "https://github.com/user/repo/pull/1",
             "programming_language": "python",
             "summary": "Fixed the thing.",
+            "technical_report": "## What was done\nFixed the thing.",
             "error_message": None,
             "model": None,
             "callback": {"attempted": True, "succeeded": True, "error": None},
@@ -293,7 +340,7 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.start_generic_sandbox_container")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_happy_path_agent_callback_success(
-        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Agent succeeds and delivers callback — Gateway skips own callback."""
         task = self._create_task()
@@ -311,7 +358,6 @@ class ExecuteTaskTest(TestCase):
         self.assertEqual(task.branch_name, "Jiffy/fix-thing")
         self.assertEqual(task.pr_url, "https://github.com/user/repo/pull/1")
         self.assertEqual(task.programming_language, "python")
-        # Gateway should NOT send its own callback since agent succeeded
         mock_cb.assert_not_called()
 
     @patch("jobs.tasks.send_fallback_callback")
@@ -392,6 +438,7 @@ class ExecuteTaskTest(TestCase):
             pr_url=None,
             programming_language=None,
             summary=None,
+            technical_report=None,
             error_message="Agent result file not found. The agent did not produce the required output contract.",
             model=None,
             callback={"attempted": False, "succeeded": False, "error": "No callback information available"},
@@ -403,7 +450,6 @@ class ExecuteTaskTest(TestCase):
 
         task.refresh_from_db()
         self.assertEqual(task.status, "failed")
-        # Gateway falls back
         mock_cb.assert_called_once()
 
     @patch("jobs.tasks.send_fallback_callback")
@@ -427,6 +473,7 @@ class ExecuteTaskTest(TestCase):
             pr_url="https://example.com/pr",
             programming_language="python",
             summary=None,
+            technical_report=None,
             error_message="Agent failed.",
             model=None,
             callback={"attempted": True, "succeeded": False, "error": "HTTP 500"},
@@ -439,7 +486,6 @@ class ExecuteTaskTest(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, "failed")
         self.assertEqual(task.error_message, "Agent failed.")
-        # These should NOT have been saved from the agent result
         self.assertIsNone(task.branch_name)
         self.assertIsNone(task.pr_url)
         self.assertIsNone(task.programming_language)
@@ -488,7 +534,6 @@ class ExecuteTaskTest(TestCase):
 
         from jobs.tasks import execute_task
 
-        # Should not raise
         execute_task(99999)
 
     @patch("jobs.tasks.send_fallback_callback")
@@ -549,6 +594,7 @@ class ExecuteTaskTest(TestCase):
             pr_url=None,
             programming_language=None,
             summary=None,
+            technical_report=None,
             error_message="Could not install dependency.",
             model=None,
             callback={"attempted": True, "succeeded": False, "error": "HTTP 500"},
@@ -598,6 +644,7 @@ class ExecuteTaskLoggingTest(TestCase):
             "pr_url": "https://github.com/user/repo/pull/1",
             "programming_language": "python",
             "summary": "Fixed.",
+            "technical_report": None,
             "error_message": None,
             "model": None,
             "callback": {"attempted": True, "succeeded": True, "error": None},
@@ -629,11 +676,9 @@ class ExecuteTaskLoggingTest(TestCase):
 
         messages = [r.getMessage() for r in cm.records]
 
-        # Every line for this task should have the task_id prefix with provider
         for msg in messages:
             self.assertIn(f"[{task.id}|github]", msg, f"Missing task_id/provider prefix: {msg}")
 
-        # Verify the ordered sequence of status transitions
         status_keywords = [
             "Task started",
             "Checking sandbox image",
@@ -759,6 +804,7 @@ class ExecuteTaskLoggingTest(TestCase):
             pr_url=None,
             programming_language=None,
             summary=None,
+            technical_report=None,
             error_message="Something went wrong",
             model=None,
             callback={"attempted": False, "succeeded": False, "error": "No callback information available"},
