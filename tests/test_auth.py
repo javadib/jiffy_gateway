@@ -12,9 +12,9 @@ META_KEY = "X-JIFFY-TOKEN"
 def _make_request(token: str = None) -> MagicMock:
     request = MagicMock()
     if token is not None:
-        request.META = {META_KEY: token}
+        request.headers = {META_KEY: token}
     else:
-        request.META = {}
+        request.headers = {}
     return request
 
 
@@ -47,7 +47,7 @@ class TestVerifyIngestToken:
 
     def test_other_header_not_accepted(self):
         request = MagicMock()
-        request.META = {"HTTP_X_OTHER_TOKEN": "secret123"}
+        request.headers = {"X-Other-Token": "secret123"}
         assert verify_ingest_token(request, "secret123") is False
 
 
