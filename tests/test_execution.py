@@ -80,7 +80,7 @@ class BuildAgentInstructionsTest(TestCase):
     def test_includes_callback_spec(self):
         instructions = build_agent_instructions(self._make_payload())
         self.assertIn("Callback Delivery", instructions)
-        self.assertIn("callback_url", instructions)
+        self.assertIn("- **URL**:", instructions)
         self.assertIn("attempted", instructions)
         self.assertIn("succeeded", instructions)
 
@@ -366,10 +366,9 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
-    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_agent_callback_failed_gateway_falls_back(
-        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Agent attempts callback but fails — Gateway falls back via spec."""
         task = self._create_task()
@@ -394,10 +393,9 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
-    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_agent_no_callback_attempt_gateway_falls_back(
-        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Agent never attempts callback — Gateway falls back via spec."""
         task = self._create_task()
@@ -422,10 +420,9 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
-    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_agent_crashed_no_result_gateway_falls_back(
-        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Agent crashes with no result — Gateway sends fallback with generic failure."""
         task = self._create_task()
@@ -578,10 +575,9 @@ class ExecuteTaskTest(TestCase):
     @patch("jobs.tasks.run_agent_in_container")
     @patch("jobs.tasks.clone_repo_in_container")
     @patch("jobs.tasks.start_generic_sandbox_container")
-    @patch("jobs.tasks.log_sandbox_startup")
     @patch("jobs.tasks.load_payload_from_redis")
     def test_agent_failure_with_callback_attempt(
-        self, mock_load, mock_log_startup, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
+        self, mock_load, mock_container, mock_clone, mock_run, mock_result, mock_ensure, mock_cb
     ):
         """Agent fails but attempted callback — Gateway still falls back."""
         task = self._create_task()
