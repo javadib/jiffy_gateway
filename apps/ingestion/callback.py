@@ -25,6 +25,7 @@ def format_callback_body(
     task_id: int,
     status: str,
     summary: str | None = None,
+    technical_report: str | None = None,
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
@@ -35,6 +36,7 @@ def format_callback_body(
         task_id: The task ID.
         status: The final status ("done" or "failed").
         summary: Optional summary of the result.
+        technical_report: Optional detailed technical report in markdown.
         branch_name: Optional branch name.
         pr_url: Optional PR/MR URL if one was opened.
         error_message: Optional error message if the task failed.
@@ -61,6 +63,12 @@ def format_callback_body(
         lines.append(f"**Branch:** {branch_name}")
     if pr_url:
         lines.append(f"**Pull Request:** {pr_url}")
+    if technical_report:
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("### Technical Report")
+        lines.append(technical_report)
     return "\n".join(lines)
 
 
@@ -68,6 +76,7 @@ def send_callback(
         task: "Task",
         status: str,
         summary: str | None = None,
+        technical_report: str | None = None,
         pr_url: str | None = None,
         error_message: str | None = None,
         model: str | None = None,
@@ -81,6 +90,7 @@ def send_callback(
         task: The Task instance.
         status: The final status ("done" or "failed").
         summary: Optional summary of the result.
+        technical_report: Optional detailed technical report in markdown.
         pr_url: Optional PR/MR URL if one was opened.
         error_message: Optional error message if the task failed.
         model: Optional LLM model used for the task.
@@ -102,6 +112,7 @@ def send_callback(
         callback_secret=task.callback_secret,
         status=status,
         summary=summary,
+        technical_report=technical_report,
         branch_name=task.branch_name,
         pr_url=pr_url,
         error_message=error_message or task.error_message,
@@ -112,6 +123,7 @@ def send_fallback_callback(
     task: "Task",
     status: str,
     summary: str | None = None,
+    technical_report: str | None = None,
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
@@ -138,6 +150,7 @@ def send_fallback_callback(
         callback_secret=task.callback_secret,
         status=status,
         summary=summary,
+        technical_report=technical_report,
         branch_name=branch_name,
         pr_url=pr_url,
         error_message=error_message,
@@ -151,6 +164,7 @@ def _send_callback_via_spec(
     callback_secret: str,
     status: str,
     summary: str | None = None,
+    technical_report: str | None = None,
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
@@ -167,6 +181,7 @@ def _send_callback_via_spec(
         callback_secret=callback_secret,
         status=status,
         summary=summary,
+        technical_report=technical_report,
         branch_name=branch_name,
         pr_url=pr_url,
         error_message=error_message,
@@ -176,6 +191,7 @@ def _send_callback_via_spec(
         task_id=task_id,
         status=status,
         summary=summary,
+        technical_report=technical_report,
         branch_name=branch_name,
         pr_url=pr_url,
         error_message=error_message,

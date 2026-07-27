@@ -18,6 +18,7 @@ class AgentResult(NamedTuple):
     pr_url: str | None
     programming_language: str | None
     summary: str | None
+    technical_report: str | None
     error_message: str | None
     model: str | None
     callback: dict | None
@@ -106,6 +107,11 @@ Task #<task_id>: ✅ Jiffy completed this task.
 **Summary:** <summary>
 **Branch:** <branch_name>
 **Pull Request:** <pr_url>
+
+---
+
+### Technical Report
+<technical_report content>
 ```
 
 For a failed task:
@@ -119,6 +125,26 @@ Task #<task_id>: ❌ Jiffy could not complete this task.
 Rules:
 - If `pr_url` is null/empty, omit the **Pull Request:** line entirely.
 - If `branch_name` is null/empty, omit the **Branch:** line entirely.
+- If `technical_report` is missing or empty, omit the entire `Technical Report` section (including the `---` separator and heading) entirely.
+- The `technical_report` field, when present, must use the following structure:
+
+  ## What was done
+  Detailed account of the actual changes made (files touched, logic changed) — more detail than the short `summary`.
+
+  ## Technology / approach chosen
+  Any libraries, patterns, or design decisions selected, and why (e.g. why a particular library over an alternative).
+
+  ## Reasoning
+  Rationale behind key implementation choices — tradeoffs considered, edge cases handled.
+
+  ## Setup / installation instructions
+  If the change introduces or modifies a module/service that needs setup (new dependency, env var, migration, config file), step-by-step instructions to install/configure/run it. Omit this section entirely if not applicable.
+
+  ## Known limitations / follow-ups
+  Anything left incomplete, deferred, or worth reviewing further.
+
+  Omit sections that don't apply rather than filling them with placeholder text.
+
 - Use the task ID from your environment if available, or 0 as a fallback.
 
 Callback endpoint details:
@@ -148,6 +174,7 @@ The file must contain exactly one JSON object with these fields:
 | `pr_url`               | string   | no       | URL of the PR/MR you opened, if any. |
 | `programming_language` | string   | no       | Best-effort detection of the primary language used (e.g. `"python"`, `"typescript"`). |
 | `summary`              | string   | yes      | A brief summary of what you did. |
+| `technical_report`     | string   | no       | Detailed technical report in markdown format for developer/technical reviewer. Must use the structure described in the Callback Delivery section above. |
 | `error_message`        | string   | no       | Details of what went wrong, if `status` is `"failed"`. |
 | `callback`             | object   | yes      | Outcome of your callback attempt. See below. |
 
@@ -195,6 +222,7 @@ def read_agent_result(container: Container) -> AgentResult:
         pr_url: str | None = None,
         programming_language: str | None = None,
         summary: str | None = None,
+        technical_report: str | None = None,
         error_message: str | None = None,
         model: str | None = None,
         callback: dict | None = None,
@@ -205,6 +233,7 @@ def read_agent_result(container: Container) -> AgentResult:
             pr_url=pr_url,
             programming_language=programming_language,
             summary=summary,
+            technical_report=technical_report,
             error_message=error_message,
             model=model,
             callback=callback or {"attempted": False, "succeeded": False, "error": "No callback information available"},
@@ -234,6 +263,7 @@ def read_agent_result(container: Container) -> AgentResult:
                 pr_url=result_data.get("pr_url"),
                 programming_language=result_data.get("programming_language"),
                 summary=result_data.get("summary"),
+                technical_report=result_data.get("technical_report"),
                 error_message=(
                     result_data.get("error_message")
                     or "Agent result JSON is missing a valid 'status' field (must be 'done' or 'failed')."
@@ -247,6 +277,7 @@ def read_agent_result(container: Container) -> AgentResult:
             pr_url=result_data.get("pr_url"),
             programming_language=result_data.get("programming_language"),
             summary=result_data.get("summary"),
+            technical_report=result_data.get("technical_report"),
             error_message=result_data.get("error_message"),
             model=result_data.get("model"),
             callback=callback,

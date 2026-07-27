@@ -65,6 +65,52 @@ class TestFormatCallbackBody(TestCase):
         self.assertIn("Task #42: ❌ Jiffy could not complete this task.", result)
         self.assertNotIn("**Reason:**", result)
 
+    def test_success_with_technical_report(self):
+        """technical_report is included with a separator and heading."""
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+            technical_report="## What was done\nFixed the bug.\n\n## Reasoning\nBecause Y.",
+        )
+        self.assertIn("---", result)
+        self.assertIn("### Technical Report", result)
+        self.assertIn("## What was done", result)
+        self.assertIn("Fixed the bug.", result)
+        self.assertIn("## Reasoning", result)
+        self.assertIn("Because Y.", result)
+
+    def test_technical_report_omitted_when_empty(self):
+        """When technical_report is empty/None, omit the section entirely."""
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+        )
+        self.assertNotIn("Technical Report", result)
+        self.assertNotIn("---", result)
+
+    def test_technical_report_omitted_when_empty_string(self):
+        """When technical_report is empty string, omit the section entirely."""
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+            technical_report="",
+        )
+        self.assertNotIn("Technical Report", result)
+        self.assertNotIn("---", result)
+
+    def test_technical_report_not_in_failed(self):
+        """technical_report should not appear in failed callback body."""
+        result = format_callback_body(
+            task_id=42,
+            status="failed",
+            error_message="Broke.",
+            technical_report="## What was done",
+        )
+        self.assertNotIn("Technical Report", result)
+
 
 class TestSendCallback(TestCase):
     """Tests for send_callback function."""
@@ -168,12 +214,15 @@ class TestSendCallback(TestCase):
             self.task,
             status="done",
             summary="Summary",
+            technical_report="## What was done\nDetailed report.",
             pr_url="https://github.com/user/repo/pull/1",
         )
 
         body = mock_request.call_args[1]["data"].decode("utf-8")
         self.assertIn("**Summary:** Summary", body)
         self.assertIn("**Pull Request:** https://github.com/user/repo/pull/1", body)
+        self.assertIn("### Technical Report", body)
+        self.assertIn("Detailed report.", body)
 
     @patch("apps.ingestion.callback.time.sleep")
     @patch("apps.ingestion.callback.requests.request")
@@ -212,6 +261,26 @@ class TestSendCallback(TestCase):
 
         body = mock_request.call_args[1]["data"].decode("utf-8")
         self.assertIn("**Branch:** fix-bug", body)
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_technical_report_in_callback_payload(self, mock_request, mock_sleep):
+        """technical_report must be passed through to the callback body."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_callback(
+            self.task,
+            status="done",
+            summary="Summary",
+            technical_report="## Reasoning\nBecause Z.",
+        )
+
+        body = mock_request.call_args[1]["data"].decode("utf-8")
+        self.assertIn("### Technical Report", body)
+        self.assertIn("## Reasoning", body)
+        self.assertIn("Because Z.", body)
 
 
 class TestSendFallbackCallback(TestCase):
@@ -274,3 +343,24 @@ class TestSendFallbackCallback(TestCase):
         send_fallback_callback(self.task, status="failed", error_message="err")
 
         self.assertEqual(mock_request.call_count, 3)
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_fallback_with_technical_report(self, mock_request, mock_sleep):
+        """Fallback callback includes technical_report when provided."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_fallback_callback(
+            self.task,
+            status="done",
+            summary="Done.",
+            technical_report="## What was done\nTask completed.",
+            branch_name="fix-bug",
+            pr_url="https://example.com/pr/1",
+        )
+
+        body = mock_request.call_args[1]["data"].decode("utf-8")
+        self.assertIn("### Technical Report", body)
+        self.assertIn("Task completed.", body)

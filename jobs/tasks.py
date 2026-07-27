@@ -66,6 +66,7 @@ def _handle_callback(
     result: AgentResult | None,
     status: str,
     summary: str | None = None,
+    technical_report: str | None = None,
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
@@ -97,6 +98,7 @@ def _handle_callback(
         task,
         status=status,
         summary=summary,
+        technical_report=technical_report,
         branch_name=branch_name,
         pr_url=pr_url,
         error_message=error_message,
@@ -253,6 +255,7 @@ def execute_task(self, task_id: int) -> None:
             result=result,
             status="done",
             summary=result.summary,
+            technical_report=result.technical_report,
             branch_name=result.branch_name,
             pr_url=result.pr_url,
         )
