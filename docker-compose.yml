@@ -164,6 +164,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  sandbox:
+    build:
+      context: ./docker/sandbox
+      dockerfile: Dockerfile
+    image: jiffy-sandbox:dev
+    container_name: jiffy-sandbox-dev
+    user: root
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/workspace:ro
+      - ./docker/sandbox/smoke-test.sh:/smoke-test.sh:ro
+      - ./docker/sandbox/opencode.json:/home/jiffy/.config/opencode/opencode.json:ro
+    networks:
+      - jiffy-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+        reservations:
+          cpus: "0.25"
+          memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   redis_data:
 

@@ -19,6 +19,9 @@ ARG NVM_VERSION=0.40.6
 ARG GH_VERSION=2.72.0
 ARG GLAB_VERSION=1.109.0
 ARG TEA_VERSION=0.9.0
+ARG NODE_VERSION=24
+ARG PYTHON_VERSION=3.12
+ARG GO_VERSION=1.26.5
 
 # 1. Base dependencies (kept from original image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,11 +45,11 @@ RUN mkdir -p "$NVM_DIR" \
 RUN printf 'export NVM_DIR="%s"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\n' "$NVM_DIR" \
     > /etc/profile.d/nvm.sh
 
-# --- Node.js 24 via nvm ---
+# --- Node.js via nvm ---
 RUN bash -c '. /etc/profile.d/nvm.sh \
-    && nvm install 24 \
-    && nvm alias default 24 \
-    && NODE_BIN_DIR="$(dirname "$(nvm which 24)")" \
+    && nvm install ${NODE_VERSION} \
+    && nvm alias default ${NODE_VERSION} \
+    && NODE_BIN_DIR="$(dirname "$(nvm which ${NODE_VERSION})")" \
     && ln -sf "$NODE_BIN_DIR/node" /usr/local/bin/node \
     && ln -sf "$NODE_BIN_DIR/npm" /usr/local/bin/npm \
     && ln -sf "$NODE_BIN_DIR/npx" /usr/local/bin/npx'
@@ -58,8 +61,8 @@ RUN node --version && npm --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 RUN uv --version \
-    && uv python install 3.12 \
-    && ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 \
+    && uv python install ${PYTHON_VERSION} \
+    && ln -sf "$(uv python find ${PYTHON_VERSION})" /usr/local/bin/python3 \
     && ln -sf /usr/local/bin/python3 /usr/local/bin/python
 
 # --- gvm (Go Version Manager) ---
@@ -72,15 +75,13 @@ RUN mkdir -p "$GVM_DIR" \
 RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
     > /etc/profile.d/gvm.sh
 
-# --- Go (latest via gvm) ---
-RUN bash -c '. /etc/profile.d/gvm.sh \
-    && GO_VERSION=$(gvm listall | grep -E "^go1\.[0-9]+(\.[0-9]+)?$" | sort -V | tail -1) \
-    && gvm install "$GO_VERSION" -B \
-    && gvm use "$GO_VERSION" --default \
-    && GO_PATH=$(command -v go) \
-    && GOFMT_PATH=$(command -v gofmt) \
-    && ln -sf "$GO_PATH" /usr/local/bin/go \
-    && ln -sf "$GOFMT_PATH" /usr/local/bin/gofmt'
+# --- Go via direct download ---
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
 RUN go version
 
