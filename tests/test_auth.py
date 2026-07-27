@@ -6,11 +6,13 @@ from unittest.mock import MagicMock, patch
 from apps.ingestion.auth import get_ingest_secret, verify_ingest_token
 
 
+META_KEY = "X-JIFFY-TOKEN"
+
+
 def _make_request(token: str = None) -> MagicMock:
-    """Build a mock request with an optional X_JIFFY_TOKEN header."""
     request = MagicMock()
     if token is not None:
-        request.META = {"X_JIFFY_TOKEN": token}
+        request.META = {META_KEY: token}
     else:
         request.META = {}
     return request

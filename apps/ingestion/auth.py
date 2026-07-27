@@ -3,27 +3,14 @@
 import hmac
 import os
 
-AUTH_HEADER = "X_JIFFY_TOKEN"
+AUTH_HEADER = "X-JIFFY-TOKEN"
 
 
 def verify_ingest_token(request, expected_secret: str) -> bool:
-    """Verify the ``X_JIFFY_TOKEN`` header against an expected secret.
-
-    A single, uniform header for all providers — Jiffy's own edge
-    components call Jiffy's own endpoints, so there is no need to
-    preserve each provider's native webhook-signing convention.
-
-    Args:
-        request: The Django request object.
-        expected_secret: The provider-specific secret to compare against.
-
-    Returns:
-        True if the token matches, False otherwise.
-    """
     if not expected_secret:
         return False
 
-    token = request.META.get(AUTH_HEADER, "")
+    token = request.headers.get(AUTH_HEADER, "")
     if not token:
         return False
 
