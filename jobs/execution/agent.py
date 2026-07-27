@@ -5,7 +5,7 @@ from typing import Any, Dict, NamedTuple
 
 from docker.models.containers import Container
 
-from .exceptions import AgentError
+from jobs.callback_specs import get_callback_spec
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class AgentResult(NamedTuple):
     summary: str | None
     error_message: str | None
     model: str | None
+    callback: dict | None
 
 
 def build_agent_instructions(payload: Dict[str, Any]) -> str:
@@ -29,6 +30,18 @@ def build_agent_instructions(payload: Dict[str, Any]) -> str:
     assuming any particular CLI conventions.
     """
     issue_text = payload.get("issue", {}).get("text", "")
+    provider = payload.get("repo", {}).get("provider_hint", "github")
+    callback_url = payload.get("callback", {}).get("url", "")
+    callback_secret = payload.get("callback", {}).get("secret", "")
+
+    # Resolve provider from repo URL if not explicitly set
+    if provider == "github" and "gitlab" in payload.get("repo", {}).get("url", ""):
+        provider = "gitlab"
+    elif provider == "github" and "gitea" in payload.get("repo", {}).get("url", ""):
+        provider = "gitea"
+
+    spec = get_callback_spec(provider)
+    spec_json = json.dumps(spec, indent=2)
 
     return f"""\
 You are a coding agent working in an isolated sandbox environment.
@@ -72,6 +85,30 @@ You own the entire rest of the workflow. Specifically:
    review* — include a mention of the configured code-review bot handle in the
    PR description (if you opened a PR) or in your final result summary (if you
    did not).
+8. **Callback attempt** — *after* completing the above (whether you succeeded
+   or partially succeeded), you MUST attempt to call the callback endpoint to
+   report your result. See "Callback Delivery" below for details.
+
+## Callback Delivery
+
+You MUST attempt exactly ONE call to the callback endpoint after finishing
+your work. Use the following callback spec to build the request:
+
+```json
+{spec_json}
+```
+
+Using this spec:
+- **URL**: {callback_url}
+- **Method**: from the spec's `method` field.
+- **Auth header**: set `{spec['auth_header']}` to `{spec['auth_value_prefix']}` + the callback secret below.
+- **Callback secret**: {callback_secret}
+- **Body**: a JSON object containing the fields listed in the spec's `body_fields` (include `task_id` as your own integer task ID — report it as 0 if you don't have one, but prefer the callback to include a real value).
+- **Query**: include any fields listed in `query_fields` as query parameters.
+- **Headers**: include any fields listed in `header_fields` as additional headers.
+
+The callback URL and secret are provided above. Make exactly ONE attempt — do
+not retry. If the call fails, report that in your result's `callback` object.
 
 ## Required Final Output
 
@@ -82,15 +119,32 @@ JSON file at the following path:
 
 The file must contain exactly one JSON object with these fields:
 
-| Field                | Type     | Required | Description |
-|----------------------|----------|----------|-------------|
-| `status`             | string   | yes      | `"done"` if the task was completed, `"failed"` if it was not. |
-| `branch_name`        | string   | yes      | The branch you created or worked on. |
-| `branch_base`        | string   | yes      | The branch you created new branch from. |
-| `pr_url`             | string   | no       | URL of the PR/MR you opened, if any. |
-| `programming_language` | string | no       | Best-effort detection of the primary language used (e.g. `"python"`, `"typescript"`). |
-| `summary`            | string   | yes      | A brief summary of what you did. |
-| `error_message`      | string   | no       | Details of what went wrong, if `status` is `"failed"`. |
+| Field                  | Type     | Required | Description |
+|------------------------|----------|----------|-------------|
+| `status`               | string   | yes      | `"done"` if the task was completed, `"failed"` if it was not. |
+| `branch_name`          | string   | yes      | The branch you created or worked on. |
+| `branch_base`          | string   | yes      | The branch you created new branch from. |
+| `pr_url`               | string   | no       | URL of the PR/MR you opened, if any. |
+| `programming_language` | string   | no       | Best-effort detection of the primary language used (e.g. `"python"`, `"typescript"`). |
+| `summary`              | string   | yes      | A brief summary of what you did. |
+| `error_message`        | string   | no       | Details of what went wrong, if `status` is `"failed"`. |
+| `callback`             | object   | yes      | Outcome of your callback attempt. See below. |
+
+### The `callback` object
+
+| Field       | Type    | Required | Description |
+|-------------|---------|----------|-------------|
+| `attempted` | boolean | yes      | Whether you attempted the callback call. |
+| `succeeded` | boolean | yes      | Whether the callback was delivered successfully (HTTP < 300). |
+| `error`     | string  | no       | Error message if the callback attempt failed. |
+
+Example:
+```json
+{{"attempted": true, "succeeded": true, "error": null}}
+```
+
+If you could not attempt the callback at all (e.g. network unavailable), set
+`attempted` to false and explain why in `error`.
 
 Do not skip this step. If you do not produce this file the system will treat
 your run as a failure.
@@ -103,29 +157,57 @@ def read_agent_result(container: Container) -> AgentResult:
     If the result file is missing or malformed, returns a failed AgentResult
     rather than raising — the caller treats any non-"done" status the same way.
     """
+    def _parse_callback(data: dict) -> dict:
+        """Extract and validate the callback sub-object from agent result data."""
+        raw = data.get("callback")
+        if not isinstance(raw, dict):
+            return {"attempted": False, "succeeded": False, "error": "Missing or invalid 'callback' object in agent result"}
+        return {
+            "attempted": bool(raw.get("attempted", False)),
+            "succeeded": bool(raw.get("succeeded", False)),
+            "error": raw.get("error") if isinstance(raw.get("error"), str) else None,
+        }
+
+    def _make_result(
+        status: str = "failed",
+        branch_name: str | None = None,
+        pr_url: str | None = None,
+        programming_language: str | None = None,
+        summary: str | None = None,
+        error_message: str | None = None,
+        model: str | None = None,
+        callback: dict | None = None,
+    ) -> AgentResult:
+        return AgentResult(
+            status=status,
+            branch_name=branch_name,
+            pr_url=pr_url,
+            programming_language=programming_language,
+            summary=summary,
+            error_message=error_message,
+            model=model,
+            callback=callback or {"attempted": False, "succeeded": False, "error": "No callback information available"},
+        )
+
     try:
         exit_code, (output, _) = container.exec_run(
             cmd=["cat", AGENT_RESULT_PATH], demux=True
         )
         if exit_code != 0:
-            return AgentResult(
+            return _make_result(
                 status="failed",
-                branch_name=None,
-                pr_url=None,
-                programming_language=None,
-                summary=None,
                 error_message=(
                     f"Agent result file not found at {AGENT_RESULT_PATH} "
                     f"(exit code {exit_code}). The agent did not produce the "
                     "required output contract."
                 ),
-                model=None,
             )
 
         result_data = json.loads(output)
+        callback = _parse_callback(result_data)
         status = result_data.get("status")
         if status not in ("done", "failed"):
-            return AgentResult(
+            return _make_result(
                 status="failed",
                 branch_name=result_data.get("branch_name"),
                 pr_url=result_data.get("pr_url"),
@@ -136,8 +218,9 @@ def read_agent_result(container: Container) -> AgentResult:
                     or "Agent result JSON is missing a valid 'status' field (must be 'done' or 'failed')."
                 ),
                 model=result_data.get("model"),
+                callback=callback,
             )
-        return AgentResult(
+        return _make_result(
             status=status,
             branch_name=result_data.get("branch_name"),
             pr_url=result_data.get("pr_url"),
@@ -145,28 +228,19 @@ def read_agent_result(container: Container) -> AgentResult:
             summary=result_data.get("summary"),
             error_message=result_data.get("error_message"),
             model=result_data.get("model"),
+            callback=callback,
         )
     except json.JSONDecodeError as e:
-        return AgentResult(
+        return _make_result(
             status="failed",
-            branch_name=None,
-            pr_url=None,
-            programming_language=None,
-            summary=None,
             error_message=f"Agent result file is not valid JSON: {e}",
-            model=None,
         )
     except Exception as e:
         logger.exception(
             "Unexpected error reading agent result from container %s",
             container.short_id,
         )
-        return AgentResult(
+        return _make_result(
             status="failed",
-            branch_name=None,
-            pr_url=None,
-            programming_language=None,
-            summary=None,
             error_message=f"Failed to read agent result: {e}",
-            model=None,
         )
