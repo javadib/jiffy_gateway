@@ -192,7 +192,7 @@ jobs:
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'X-Jiffy-Token': process.env.JIFFY_INGEST_TOKEN
+                'X-JIFFY-TOKEN': process.env.JIFFY_INGEST_TOKEN
               },
               body: JSON.stringify(payload)
             });

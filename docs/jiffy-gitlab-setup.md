@@ -288,7 +288,7 @@ class JiffyRelayHandler(BaseHTTPRequestHandler):
         ingest_url = f"{JIFFY_GATEWAY_URL}/api/gitlab/ingestion"
         ingest_headers = {
             "Content-Type": "application/json",
-            "X-Jiffy-Token": JIFFY_INGEST_TOKEN,
+            "X-JIFFY-TOKEN": JIFFY_INGEST_TOKEN,
         }
 
         try:
