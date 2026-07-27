@@ -21,6 +21,49 @@ MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2
 
 
+def format_callback_body(
+    task_id: int,
+    status: str,
+    summary: str | None = None,
+    branch_name: str | None = None,
+    pr_url: str | None = None,
+    error_message: str | None = None,
+) -> str:
+    """Format the callback payload as human-readable text.
+
+    Args:
+        task_id: The task ID.
+        status: The final status ("done" or "failed").
+        summary: Optional summary of the result.
+        branch_name: Optional branch name.
+        pr_url: Optional PR/MR URL if one was opened.
+        error_message: Optional error message if the task failed.
+
+    Returns:
+        Human-readable text suitable for posting as an issue/PR comment.
+    """
+    if status == "failed":
+        lines = [
+            f"Task #{task_id}: ❌ Jiffy could not complete this task.",
+            "",
+        ]
+        if error_message:
+            lines.append(f"**Reason:** {error_message}")
+        return "\n".join(lines)
+
+    lines = [
+        f"Task #{task_id}: ✅ Jiffy completed this task.",
+    ]
+    if summary:
+        lines.append("")
+        lines.append(f"**Summary:** {summary}")
+    if branch_name:
+        lines.append(f"**Branch:** {branch_name}")
+    if pr_url:
+        lines.append(f"**Pull Request:** {pr_url}")
+    return "\n".join(lines)
+
+
 def send_callback(
         task: "Task",
         status: str,
@@ -117,7 +160,7 @@ def _send_callback_via_spec(
     Shared by ``send_callback`` (Gateway-owned fallback) and the agent's own
     first-attempt logic (documented in the agent instructions).
     """
-    method, url, headers, body = build_callback_request(
+    method, url, _headers, _ = build_callback_request(
         spec=spec,
         task_id=task_id,
         callback_url=callback_url,
@@ -128,6 +171,20 @@ def _send_callback_via_spec(
         pr_url=pr_url,
         error_message=error_message,
     )
+
+    body = format_callback_body(
+        task_id=task_id,
+        status=status,
+        summary=summary,
+        branch_name=branch_name,
+        pr_url=pr_url,
+        error_message=error_message,
+    ).encode("utf-8")
+
+    headers: dict[str, str] = {
+        "Content-Type": "text/plain; charset=utf-8",
+        spec["auth_header"]: spec["auth_value_prefix"] + callback_secret,
+    }
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:

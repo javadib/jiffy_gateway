@@ -1,13 +1,69 @@
 """Tests for callback dispatch."""
 
-import json
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
-from apps.ingestion.callback import send_fallback_callback, send_callback
-from jobs.callback_specs import get_callback_spec
+from apps.ingestion.callback import format_callback_body, send_fallback_callback, send_callback
 from jobs.models import Task
+
+
+class TestFormatCallbackBody(TestCase):
+    """Tests for format_callback_body function."""
+
+    def test_success_with_all_fields(self):
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+            branch_name="fix-bug",
+            pr_url="https://github.com/user/repo/pull/1",
+        )
+        self.assertIn("Task #42: ✅ Jiffy completed this task.", result)
+        self.assertIn("**Summary:** Fixed the bug.", result)
+        self.assertIn("**Branch:** fix-bug", result)
+        self.assertIn("**Pull Request:** https://github.com/user/repo/pull/1", result)
+
+    def test_success_without_pr_url(self):
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+            branch_name="fix-bug",
+        )
+        self.assertIn("**Summary:** Fixed the bug.", result)
+        self.assertIn("**Branch:** fix-bug", result)
+        self.assertNotIn("Pull Request", result)
+
+    def test_success_without_branch(self):
+        result = format_callback_body(
+            task_id=42,
+            status="done",
+            summary="Fixed the bug.",
+            pr_url="https://github.com/user/repo/pull/1",
+        )
+        self.assertIn("**Summary:** Fixed the bug.", result)
+        self.assertIn("**Pull Request:** https://github.com/user/repo/pull/1", result)
+        self.assertNotIn("**Branch:**", result)
+
+    def test_success_minimal(self):
+        result = format_callback_body(task_id=42, status="done")
+        self.assertIn("Task #42: ✅ Jiffy completed this task.", result)
+        self.assertNotIn("**Summary:**", result)
+        self.assertNotIn("**Branch:**", result)
+        self.assertNotIn("Pull Request", result)
+
+    def test_failed_with_error(self):
+        result = format_callback_body(
+            task_id=42, status="failed", error_message="Something went wrong."
+        )
+        self.assertIn("Task #42: ❌ Jiffy could not complete this task.", result)
+        self.assertIn("**Reason:** Something went wrong.", result)
+
+    def test_failed_without_error(self):
+        result = format_callback_body(task_id=42, status="failed")
+        self.assertIn("Task #42: ❌ Jiffy could not complete this task.", result)
+        self.assertNotIn("**Reason:**", result)
 
 
 class TestSendCallback(TestCase):
@@ -34,16 +90,15 @@ class TestSendCallback(TestCase):
         mock_request.assert_called_once()
         call_args = mock_request.call_args
         self.assertEqual(call_args[0][0], "POST")
-        self.assertEqual(call_args[1]["url"], "https://example.com/callback")
+        self.assertEqual(call_args[0][1], "https://example.com/callback")
 
-        body = call_args[1]["data"]
-        payload = json.loads(body)
-        self.assertEqual(payload["task_id"], self.task.id)
-        self.assertEqual(payload["status"], "done")
-        self.assertEqual(payload["summary"], "Task completed")
+        body = call_args[1]["data"].decode("utf-8")
+        self.assertIn("✅ Jiffy completed this task.", body)
+        self.assertIn("**Summary:** Task completed", body)
+        self.assertIn(f"Task #{self.task.id}", body)
 
         headers = call_args[1]["headers"]
-        self.assertNotIn("X-Jiffy-Signature", headers)
+        self.assertIn("Content-Type", headers)
 
     @patch("apps.ingestion.callback.requests.request")
     def test_sends_raw_secret_in_authorization_header(self, mock_request):
@@ -82,7 +137,6 @@ class TestSendCallback(TestCase):
         mock_response.status_code = 500
         mock_request.return_value = mock_response
 
-        # Should not raise
         send_callback(self.task, status="failed", error_message="Error")
 
         self.assertEqual(mock_request.call_count, 3)
@@ -117,25 +171,47 @@ class TestSendCallback(TestCase):
             pr_url="https://github.com/user/repo/pull/1",
         )
 
-        body = mock_request.call_args[1]["data"]
-        payload = json.loads(body)
-        self.assertEqual(payload["pr_url"], "https://github.com/user/repo/pull/1")
-        self.assertEqual(payload["summary"], "Summary")
+        body = mock_request.call_args[1]["data"].decode("utf-8")
+        self.assertIn("**Summary:** Summary", body)
+        self.assertIn("**Pull Request:** https://github.com/user/repo/pull/1", body)
 
     @patch("apps.ingestion.callback.time.sleep")
     @patch("apps.ingestion.callback.requests.request")
-    def test_omits_none_fields(self, mock_request, mock_sleep):
+    def test_failed_callback_format(self, mock_request, mock_sleep):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_callback(self.task, status="failed", error_message="Something broke")
+
+        body = mock_request.call_args[1]["data"].decode("utf-8")
+        self.assertIn("❌ Jiffy could not complete this task.", body)
+        self.assertIn("**Reason:** Something broke", body)
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_content_type_is_text_plain(self, mock_request, mock_sleep):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_request.return_value = mock_response
 
         send_callback(self.task, status="done")
 
-        body = mock_request.call_args[1]["data"]
-        payload = json.loads(body)
-        self.assertNotIn("summary", payload)
-        self.assertNotIn("pr_url", payload)
-        self.assertNotIn("error_message", payload)
+        headers = mock_request.call_args[1]["headers"]
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+
+    @patch("apps.ingestion.callback.requests.request")
+    def test_send_callback_with_branch_name(self, mock_request):
+        self.task.branch_name = "fix-bug"
+        self.task.save()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_callback(self.task, status="done", summary="Fixed it.")
+
+        body = mock_request.call_args[1]["data"].decode("utf-8")
+        self.assertIn("**Branch:** fix-bug", body)
 
 
 class TestSendFallbackCallback(TestCase):
@@ -174,11 +250,9 @@ class TestSendFallbackCallback(TestCase):
         headers = call_args[1]["headers"]
         self.assertIn("Bearer fallback-secret", headers["Authorization"])
 
-        body = call_args[1]["data"]
-        payload = json.loads(body)
-        self.assertEqual(payload["status"], "failed")
-        self.assertEqual(payload["branch_name"], "Jiffy/attempt")
-        self.assertEqual(payload["error_message"], "Agent crashed")
+        body = call_args[1]["data"].decode("utf-8")
+        self.assertIn("❌ Jiffy could not complete this task.", body)
+        self.assertIn("**Reason:** Agent crashed", body)
 
     @patch("apps.ingestion.callback.time.sleep")
     @patch("apps.ingestion.callback.requests.request")
