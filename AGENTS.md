@@ -116,7 +116,7 @@ Note: `*/callback` (e.g. `github/callback`) is **not** an inbound HTTP route —
 ## Ingestion Endpoint — Details
 
 - Three separate Django views, one per provider (`github/ingestion`, `gitlab/ingestion`, `gitea/ingestion`) rather than one generic endpoint — kept distinct so each provider's auth secret and payload validation stay independently testable.
-- **Auth**: a shared token read from the `X_JIFFY_TOKEN` request header, verified with a constant-time comparison (`hmac.compare_digest`) against that provider's own configured secret (e.g. `GITHUB_INGEST_TOKEN`, `GITLAB_INGEST_TOKEN`, `GITEA_INGEST_TOKEN` — one env var per provider/deployment, never shared across providers or across teams' installations). Reject with `401` before touching the DB or Redis if missing or mismatched.
+- **Auth**: a shared token read from the `X-JIFFY-TOKEN ` request header, verified with a constant-time comparison (`hmac.compare_digest`) against that provider's own configured secret (e.g. `GITHUB_INGEST_TOKEN`, `GITLAB_INGEST_TOKEN`, `GITEA_INGEST_TOKEN` — one env var per provider/deployment, never shared across providers or across teams' installations). Reject with `401` before touching the DB or Redis if missing or mismatched.
 - **Payload shape** (identical across all three providers):
   ```json
   {
@@ -256,7 +256,7 @@ There is no Gateway-side branch-naming function — the agent decides the branch
 - Standard Django app structure; keep webhook ingestion, container provisioning/clone, and agent hand-off in separate apps/modules (e.g. `ingestion/`, `execution/`) rather than one monolithic app.
 - Type hints on all new functions.
 - No raw SQL (see Database Strategy above) — this is a hard rule, not a style preference.
-- Settings must read all secrets (`X_JIFFY_TOKEN` expected values per provider, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens and `callback.secret` come from the request payload, not from settings.
+- Settings must read all secrets (`X-JIFFY-TOKEN ` expected values per provider, Redis URL) from environment variables — never commit secrets or default them to real-looking values in code. Per-task repo tokens and `callback.secret` come from the request payload, not from settings.
 - Favor small, testable functions for each Gateway-owned step (`start_generic_sandbox_container`, `clone_repo_in_container`, `build_agent_instructions`, `run_agent_in_container`, `read_agent_result`, `send_callback`) so they can be unit-tested independently of Celery/Docker where possible (mock the Docker/agent calls in tests).
 
 ## Out of Scope for This Repo

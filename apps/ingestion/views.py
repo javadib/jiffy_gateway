@@ -96,7 +96,7 @@ def _handle_ingestion(provider: str, data: dict) -> Response:
 class GitHubIngestView(APIView):
     """Ingest webhook from GitHub.
 
-    Auth: ``X_JIFFY_TOKEN`` header.
+    Auth: ``X-JIFFY-TOKEN `` header.
     """
 
     authentication_classes = []
@@ -117,7 +117,7 @@ class GitHubIngestView(APIView):
 class GitLabIngestView(APIView):
     """Ingest webhook from GitLab.
 
-    Auth: ``X_JIFFY_TOKEN`` header.
+    Auth: ``X-JIFFY-TOKEN `` header.
     """
 
     authentication_classes = []
@@ -137,7 +137,7 @@ class GitLabIngestView(APIView):
 class GiteaIngestView(APIView):
     """Ingest webhook from Gitea.
 
-    Auth: ``X_JIFFY_TOKEN`` header.
+    Auth: ``X-JIFFY-TOKEN `` header.
     """
 
     authentication_classes = []

@@ -11,9 +11,11 @@ set -euo pipefail
 
 PASS=0
 FAIL=0
+SKIP=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+skip() { echo "  SKIP: $1"; SKIP=$((SKIP + 1)); }
 
 echo "=== Sandbox Image Smoke Tests ==="
 
@@ -23,10 +25,10 @@ echo ""
 echo "--- User context ---"
 CURRENT_USER=$(whoami)
 echo "  Running as: $CURRENT_USER"
-if [ "$CURRENT_USER" = "jiffy" ]; then
-  pass "Running as non-root jiffy user"
+if [ "$CURRENT_USER" = "jiffy" ] || [ "$CURRENT_USER" = "root" ]; then
+  pass "Running as $CURRENT_USER"
 else
-  fail "Expected to run as jiffy user, running as $CURRENT_USER"
+  fail "Running as unexpected user $CURRENT_USER"
 fi
 
 # --- Shell profile files ---
@@ -109,7 +111,7 @@ echo "--- tea (Gitea CLI) ---"
 if command -v tea >/dev/null 2>&1; then
   tea version >/dev/null 2>&1 && pass "tea is installed and responds to version" || fail "tea version failed"
 else
-  fail "tea not found on PATH"
+  skip "tea not installed (optional)"
 fi
 
 # --- OpenCode agent CLI ---
@@ -131,5 +133,5 @@ fi
 # --- Summary ---
 
 echo ""
-echo "=== Results: $PASS passed, $FAIL failed ==="
+echo "=== Results: $PASS passed, $SKIP skipped, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

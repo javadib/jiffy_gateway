@@ -8,7 +8,7 @@ Jiffy's edge components against the Gateway ingestion endpoints.
 Every ingestion request must include an HTTP header:
 
 ```
-X_JIFFY_TOKEN: <secret-value>
+X-JIFFY-TOKEN : <secret-value>
 ```
 
 The Gateway verifies this header against a per-provider secret configured
@@ -59,7 +59,7 @@ variables at process start time.
 ## Edge-side storage (CI/CD secrets)
 
 The same secret value must also be stored in each provider's CI/CD
-secrets store, where the edge job injects it as the `X_JIFFY_TOKEN`
+secrets store, where the edge job injects it as the `X-JIFFY-TOKEN `
 header on its request to the ingestion endpoint:
 
 | Provider   | Where to store                                                  |
@@ -75,7 +75,7 @@ Example edge-job snippet (GitHub Actions):
   run: |
     curl -X POST "$JIFFY_URL/api/github/ingestion" \
       -H "Content-Type: application/json" \
-      -H "X_JIFFY_TOKEN: ${{ secrets.JIFFY_INGEST_TOKEN }}" \
+      -H "X-JIFFY-TOKEN : ${{ secrets.JIFFY_INGEST_TOKEN }}" \
       -d @payload.json
 ```
 

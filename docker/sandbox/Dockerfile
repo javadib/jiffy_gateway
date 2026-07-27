@@ -19,6 +19,9 @@ ARG NVM_VERSION=0.40.6
 ARG GH_VERSION=2.72.0
 ARG GLAB_VERSION=1.109.0
 ARG TEA_VERSION=0.9.0
+ARG NODE_VERSION=24
+ARG PYTHON_VERSION=3.12
+ARG GO_VERSION=1.26.5
 
 # 1. Base dependencies (kept from original image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,22 +45,45 @@ RUN mkdir -p "$NVM_DIR" \
 RUN printf 'export NVM_DIR="%s"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\n' "$NVM_DIR" \
     > /etc/profile.d/nvm.sh
 
+# --- Node.js via nvm ---
+RUN bash -c '. /etc/profile.d/nvm.sh \
+    && nvm install ${NODE_VERSION} \
+    && nvm alias default ${NODE_VERSION} \
+    && NODE_BIN_DIR="$(dirname "$(nvm which ${NODE_VERSION})")" \
+    && ln -sf "$NODE_BIN_DIR/node" /usr/local/bin/node \
+    && ln -sf "$NODE_BIN_DIR/npm" /usr/local/bin/npm \
+    && ln -sf "$NODE_BIN_DIR/npx" /usr/local/bin/npx'
+
+RUN node --version && npm --version
+
 # --- uv (Python package/version manager) ---
-# Installed to /usr/local/bin — available to all users without sourcing.
+# Installed to $HOME/.local/bin by default; add to PATH explicitly.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+RUN uv --version \
+    && uv python install ${PYTHON_VERSION} \
+    && ln -sf "$(uv python find ${PYTHON_VERSION})" /usr/local/bin/python3 \
+    && ln -sf /usr/local/bin/python3 /usr/local/bin/python
 
 # --- gvm (Go Version Manager) ---
-#ENV GVM_DIR=/usr/local/gvm
-#RUN mkdir -p "$GVM_DIR" \
-#    && git clone https://github.com/moovweb/gvm.git "$GVM_DIR" \
-#    && chmod +x "$GVM_DIR/bin/gvm"
+# The official installer clones the repo AND generates scripts/gvm from scripts/gvm.in
+ENV GVM_DIR=/usr/local/gvm
+RUN curl -fsSL https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer \
+    | GVM_DIR="$GVM_DIR" bash
 
 # Make gvm available in non-interactive shells via /etc/profile.d
-#RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
-#    > /etc/profile.d/gvm.sh
+RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \
+    > /etc/profile.d/gvm.sh
 
-# Allow jiffy user to write GVM version directories and symlinks
-#RUN chown -R root:jiffy "$GVM_DIR" && chmod -R g+w "$GVM_DIR"
+# --- Go via direct download ---
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
+RUN go version
 
 # 3. Git provider CLIs — pinned versions
 
@@ -126,13 +152,23 @@ export PATH="/usr/local/bin:$PATH"\n\
 #      docker run -v /host/path/to/opencode.json:/home/jiffy/.config/opencode/opencode.json:ro ...
 #    The placeholder ensures OpenCode works even if no external config is mounted.
 RUN mkdir -p /home/jiffy/.config/opencode \
-    && echo '{}' > /home/jiffy/.config/opencode/opencode.json \
+    && echo '{"$schema": "https://opencode.ai/config.json"}' > /home/jiffy/.config/opencode/opencode.json \
     && chown -R jiffy:jiffy /home/jiffy/.config
+
+# 7. Verify language runtimes are globally available in a non-interactive shell
+RUN echo "=== Language Runtime Verification ===" \
+    && python3 --version \
+    && node --version \
+    && npm --version \
+    && go version \
+    && echo "=== All runtimes verified ==="
+
+# 8. Startup report script — runs on every container start
+COPY startup-report.sh /usr/local/bin/startup-report.sh
+RUN chmod +x /usr/local/bin/startup-report.sh
 
 USER jiffy
 WORKDIR /workspace
 
-# Keep the container alive so exec_run can issue commands into it.
-# bash -c 'while true; do sleep 1d; done' is more portable than tail -f /dev/null
-# and avoids issues on minimal images that lack tail.
-CMD ["bash", "-c", "while true; do sleep 86400; done"]
+# Print startup report on container start, then keep alive for exec_run.
+CMD ["bash", "-c", "/usr/local/bin/startup-report.sh; while true; do sleep 86400; done"]
