@@ -6,8 +6,9 @@ from typing import Any
 
 from celery import shared_task
 
-from apps.ingestion.callback import send_callback
+from apps.ingestion.callback import send_fallback_callback
 from jobs.execution.agent import (
+    AgentResult,
     build_agent_instructions,
     read_agent_result,
 )
@@ -50,13 +51,65 @@ def _update_status(task: Task, status: str) -> None:
     task.save(update_fields=["status", "updated_at"])
 
 
-def _fail_task(task: Task, error_message: str) -> None:
-    """Mark a task as failed and send the callback."""
+def _agent_callback_succeeded(result: AgentResult | None) -> bool:
+    """Return True if the agent successfully delivered its own callback."""
+    if result is None:
+        return False
+    cb = result.callback
+    if not isinstance(cb, dict):
+        return False
+    return bool(cb.get("attempted")) and bool(cb.get("succeeded"))
+
+
+def _handle_callback(
+    task: Task,
+    result: AgentResult | None,
+    status: str,
+    summary: str | None = None,
+    branch_name: str | None = None,
+    pr_url: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Handle callback delivery: agent-first, Gateway fallback.
+
+    If the agent already delivered the callback successfully, skip Gateway
+    callback.  Otherwise fall back to the Gateway sending via the spec.
+    """
+    if _agent_callback_succeeded(result):
+        _task_log(
+            task.id,
+            logging.INFO,
+            "Agent already delivered callback successfully — skipping Gateway callback",
+            provider=task.provider,
+        )
+        return
+
+    _task_log(
+        task.id,
+        logging.WARNING,
+        "Agent callback not delivered (attempted=%s, succeeded=%s) — Gateway falling back",
+        result.callback.get("attempted", False) if result else "N/A",
+        result.callback.get("succeeded", False) if result else "N/A",
+        provider=task.provider,
+    )
+
+    send_fallback_callback(
+        task,
+        status=status,
+        summary=summary,
+        branch_name=branch_name,
+        pr_url=pr_url,
+        error_message=error_message,
+    )
+
+
+def _fail_task(task: Task, error_message: str, result: AgentResult | None = None) -> None:
+    """Mark a task as failed and handle callback (agent-first, Gateway fallback)."""
     task.status = "failed"
     task.error_message = error_message
     task.save(update_fields=["status", "error_message", "updated_at"])
     _task_log(task.id, logging.ERROR, "Task failed: %s", error_message, provider=task.provider)
-    send_callback(task, status="failed", error_message=task.error_message)
+    _handle_callback(task, result, status="failed", error_message=error_message)
 
 
 def _redact_payload_for_log(payload: dict) -> dict:
@@ -137,6 +190,7 @@ def execute_task(self, task_id: int) -> None:
         return
 
     # --- Provision → Clone → Run → Report ------------------------------------
+    result: AgentResult | None = None
     try:
         _update_status(task, "provisioning")
         _task_log(task_id, logging.INFO, "Status → provisioning", provider=task.provider)
@@ -161,33 +215,31 @@ def execute_task(self, task_id: int) -> None:
             # Read result
             result = read_agent_result(container)
 
-        # Reporting
-        _update_status(task, "reporting")
-        _task_log(task_id, logging.INFO, "Status → reporting", provider=task.provider)
-
         if result.status == "done":
             _task_log(
                 task_id,
                 logging.INFO,
-                "Agent result: done — model=%s branch=%s pr=%s lang=%s",
+                "Agent result: done — model=%s branch=%s pr=%s lang=%s callback=%s",
                 result.model or "(unknown)",
                 result.branch_name or "(none)",
                 result.pr_url or "(none)",
                 result.programming_language or "(none)",
+                result.callback or "(none)",
                 provider=task.provider,
             )
         else:
             _task_log(
                 task_id,
                 logging.WARNING,
-                "Agent result: failed — model=%s error=%s",
+                "Agent result: failed — model=%s error=%s callback=%s",
                 result.model or "(unknown)",
                 result.error_message or "(no details)",
+                result.callback or "(none)",
                 provider=task.provider,
             )
 
         if result.status != "done":
-            _fail_task(task, error_message=result.error_message or "Agent reported failure without details.")
+            _fail_task(task, error_message=result.error_message or "Agent reported failure without details.", result=result)
             return
 
         task.branch_name = result.branch_name
@@ -195,12 +247,14 @@ def execute_task(self, task_id: int) -> None:
         task.pr_url = result.pr_url
         task.save(update_fields=["branch_name", "programming_language", "pr_url"])
 
-        send_callback(
+        # Callback: agent attempted first, Gateway falls back if needed
+        _handle_callback(
             task,
+            result=result,
             status="done",
             summary=result.summary,
+            branch_name=result.branch_name,
             pr_url=result.pr_url,
-            model=result.model,
         )
         _update_status(task, "done")
 
@@ -223,7 +277,7 @@ def execute_task(self, task_id: int) -> None:
             e,
             provider=task.provider,
         )
-        _fail_task(task, str(e))
+        _fail_task(task, str(e), result=result)
     except Exception as e:
         elapsed = time.monotonic() - start_time
         _task_log(
@@ -234,5 +288,5 @@ def execute_task(self, task_id: int) -> None:
             e,
             provider=task.provider,
         )
-        _fail_task(task, "An unexpected internal error occurred.")
+        _fail_task(task, "An unexpected internal error occurred.", result=result)
         raise self.retry(exc=e)
