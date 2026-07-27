@@ -92,23 +92,44 @@ You own the entire rest of the workflow. Specifically:
 ## Callback Delivery
 
 You MUST attempt exactly ONE call to the callback endpoint after finishing
-your work. Use the following callback spec to build the request:
+your work. Make exactly ONE attempt — do not retry. If the call fails, report
+that in your result's `callback` object.
 
-```json
-{spec_json}
+The callback body must be **human-readable text** (not raw JSON) suitable for
+posting as an issue/PR comment. Use the following format:
+
+For a successful task:
+
+```
+Task #<task_id>: ✅ Jiffy completed this task.
+
+**Summary:** <summary>
+**Branch:** <branch_name>
+**Pull Request:** <pr_url>
 ```
 
-Using this spec:
-- **URL**: {callback_url}
-- **Method**: from the spec's `method` field.
-- **Auth header**: set `{spec['auth_header']}` to `{spec['auth_value_prefix']}` + the callback secret below.
-- **Callback secret**: {callback_secret}
-- **Body**: a JSON object containing the fields listed in the spec's `body_fields` (include `task_id` as your own integer task ID — report it as 0 if you don't have one, but prefer the callback to include a real value).
-- **Query**: include any fields listed in `query_fields` as query parameters.
-- **Headers**: include any fields listed in `header_fields` as additional headers.
+For a failed task:
 
-The callback URL and secret are provided above. Make exactly ONE attempt — do
-not retry. If the call fails, report that in your result's `callback` object.
+```
+Task #<task_id>: ❌ Jiffy could not complete this task.
+
+**Reason:** <error_message>
+```
+
+Rules:
+- If `pr_url` is null/empty, omit the **Pull Request:** line entirely.
+- If `branch_name` is null/empty, omit the **Branch:** line entirely.
+- Use the task ID from your environment if available, or 0 as a fallback.
+
+Callback endpoint details:
+- **URL**: {callback_url}
+- **Method**: {spec['method']}
+- **Auth header**: `{spec['auth_header']}: {spec['auth_value_prefix']}<callback_secret>`
+- **Callback secret**: {callback_secret}
+- **Content-Type**: text/plain
+- **Body**: the formatted text described above (UTF-8 encoded bytes).
+- **Query**: none.
+- **Headers**: none beyond the auth header and content type.
 
 ## Required Final Output
 
