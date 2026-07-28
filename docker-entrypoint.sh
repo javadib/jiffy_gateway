@@ -3,7 +3,6 @@ set -e
 
 # Ensure data directory exists and is writable (volume mount may bring root-owned dir)
 mkdir -p /app/data
-chmod -R 777 /app/data
 
 echo "Running database migrations..."
 uv run python manage.py migrate --noinput
