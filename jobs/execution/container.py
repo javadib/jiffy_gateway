@@ -400,6 +400,7 @@ def run_agent_in_container(
     # Redirect agent stdout/stderr to the container's main stdout so docker logs
     # shows real-time output; exit code remains captured via exec_run return value.
     run_cmd = (
+        'cd /workspace && '
         'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
         'opencode run --auto "$INSTRUCTIONS" > /proc/1/fd/1 2>&1'
     )
