@@ -185,7 +185,6 @@ services:
     build:
       context: ./docker/sandbox
       dockerfile: Dockerfile
-    image: jiffy-sandbox:dev
     container_name: jiffy-sandbox-dev
     user: root
     stdin_open: true

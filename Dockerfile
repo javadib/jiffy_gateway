@@ -4,22 +4,26 @@ ARG APP_VERSION=dev
 
 WORKDIR /app
 
+RUN addgroup --system app && adduser --system --ingroup app app
+
 ENV APP_VERSION=${APP_VERSION} \
+    HOME=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/root/.local/bin:$PATH"
+    UV_CACHE_DIR=/app/.cache/uv \
+    PATH="/app/.local/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv && \
     uv sync --frozen --no-dev
 
-RUN addgroup --system app && adduser --system --ingroup app app
-
 COPY --chown=app:app . .
 
-RUN mkdir -p data && uv run python manage.py collectstatic --noinput
-USER app
+RUN mkdir -p data .cache/uv && \
+    uv run python manage.py collectstatic --noinput && \
+    chown -R app:app /app
 
+USER app
 
 EXPOSE 8000
 
