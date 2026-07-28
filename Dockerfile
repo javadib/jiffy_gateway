@@ -6,7 +6,6 @@ WORKDIR /app
 
 ENV APP_VERSION=${APP_VERSION} \
     HOME=/app \
-    UV_CACHE_DIR=/tmp/uv-cache \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/root/.local/bin:$PATH"
