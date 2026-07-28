@@ -8,7 +8,7 @@ ENV APP_VERSION=${APP_VERSION} \
     HOME=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/root/.local/bin:$PATH"
+    PATH="/app/.local/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv && \
