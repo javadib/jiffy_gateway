@@ -24,13 +24,33 @@ class AgentResult(NamedTuple):
     callback: dict | None
 
 
+def _format_turns(turns: list[dict]) -> str:
+    """Format a turns array into a human-readable thread with role annotations."""
+    blocks = []
+    for t in turns:
+        role_label = "User" if t.get("role") == "user" else "Agent (Jiffy)"
+        author = t.get("author", "unknown")
+        body = t.get("body", "")
+        blocks.append(f"--- Turn: {role_label} ({author}) ---\n{body}")
+    return "\n\n".join(blocks)
+
+
+def _extract_issue_text(payload: Dict[str, Any]) -> str:
+    """Extract the issue thread text from payload, preferring structured turns over legacy text."""
+    issue = payload.get("issue", {})
+    turns = issue.get("turns")
+    if turns and isinstance(turns, list) and len(turns) > 0:
+        return _format_turns(turns)
+    return issue.get("text", "")
+
+
 def build_agent_instructions(payload: Dict[str, Any]) -> str:
     """Build the instructions text handed to the coding agent.
 
     The instructions are agent-agnostic — they describe the contract without
     assuming any particular CLI conventions.
     """
-    issue_text = payload.get("issue", {}).get("text", "")
+    issue_text = _extract_issue_text(payload)
     provider = payload.get("repo", {}).get("provider_hint", "github")
     callback_url = payload.get("callback", {}).get("url", "")
     callback_secret = payload.get("callback", {}).get("secret", "")
@@ -42,7 +62,21 @@ def build_agent_instructions(payload: Dict[str, Any]) -> str:
         provider = "gitea"
 
     spec = get_callback_spec(provider)
-    spec_json = json.dumps(spec, indent=2)
+
+    extra_header_lines = "\n".join(
+        f"  - `{name}: {value}`" for name, value in spec.get("extra_headers", {}).items()
+    ) or "  - (none beyond the auth header and Content-Type)"
+
+    if spec.get("body_format") == "json":
+        body_field = spec.get("body_text_field", "body")
+        body_description = (
+            f"a JSON object with the formatted text above as a single string "
+            f'under the `{body_field}` key, e.g. '
+            f'`{{"{body_field}": "Task #1: ✅ Jiffy completed this task.\\n..."}}`. '
+            "Escape newlines properly — it must be valid JSON."
+        )
+    else:
+        body_description = "the formatted text described above (UTF-8 encoded bytes)."
 
     return f"""\
 You are a coding agent working in an isolated sandbox environment.
@@ -96,8 +130,10 @@ You MUST attempt exactly ONE call to the callback endpoint after finishing
 your work. Make exactly ONE attempt — do not retry. If the call fails, report
 that in your result's `callback` object.
 
-The callback body must be **human-readable text** (not raw JSON) suitable for
-posting as an issue/PR comment. Use the following format:
+The report you send must be **human-readable markdown** suitable for posting
+as an issue/PR comment. Compose it in the format below, then send it exactly
+as described under "Callback endpoint details" — that section says whether it
+goes on the wire as raw text or wrapped in a JSON field.
 
 For a successful task:
 
@@ -152,10 +188,11 @@ Callback endpoint details:
 - **Method**: {spec['method']}
 - **Auth header**: `{spec['auth_header']}: {spec['auth_value_prefix']}<callback_secret>`
 - **Callback secret**: {callback_secret}
-- **Content-Type**: text/plain
-- **Body**: the formatted text described above (UTF-8 encoded bytes).
+- **Content-Type**: {spec['content_type']}
+- **Body**: {body_description}
 - **Query**: none.
-- **Headers**: none beyond the auth header and content type.
+- **Additional required headers**:
+{extra_header_lines}
 
 ## Required Final Output
 

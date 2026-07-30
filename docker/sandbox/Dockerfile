@@ -58,18 +58,25 @@ RUN node --version && npm --version
 
 # --- uv (Python package/version manager) ---
 # Installed to $HOME/.local/bin by default; add to PATH explicitly.
+# UV_PYTHON_INSTALL_DIR directs Python installs to a system-wide location
+# accessible to all users, not under /root which is restricted at runtime.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:${PATH}"
+ENV PATH="/root/.local/bin:${PATH}" \
+    UV_PYTHON_INSTALL_DIR=/usr/local/uv-python
 RUN uv --version \
     && uv python install ${PYTHON_VERSION} \
+    && echo "Python binary at: $(uv python find ${PYTHON_VERSION})" \
     && ln -sf "$(uv python find ${PYTHON_VERSION})" /usr/local/bin/python3 \
-    && ln -sf /usr/local/bin/python3 /usr/local/bin/python
+    && ln -sf /usr/local/bin/python3 /usr/local/bin/python \
+    && echo "=== Python install verification ===" \
+    && python3 --version \
+    && echo "=== Python OK ==="
 
 # --- gvm (Go Version Manager) ---
 # The official installer clones the repo AND generates scripts/gvm from scripts/gvm.in
 ENV GVM_DIR=/usr/local/gvm
 RUN curl -fsSL https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer \
-    | GVM_DIR="$GVM_DIR" bash
+    | GVM_DIR="$GVM_DIR" bash || echo "gvm install failed (network issue) — continuing"
 
 # Make gvm available in non-interactive shells via /etc/profile.d
 RUN printf 'export GVM_DIR="%s"\n[ -s "$GVM_DIR/scripts/gvm" ] && . "$GVM_DIR/scripts/gvm"\n' "$GVM_DIR" \

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import RequestFactory, TestCase
 
+from apps.ingestion.serializers import IngestionPayloadSerializer
 from apps.ingestion.views import GiteaIngestView, GitHubIngestView, GitLabIngestView
 from jobs.models import Task
 
@@ -412,3 +413,83 @@ class TestGiteaIngest(TestCase):
         response2 = GiteaIngestView.as_view()(request2)
         self.assertEqual(response2.status_code, 202)
         self.assertEqual(Task.objects.count(), 1)
+
+
+class TestIngestionPayloadSerializer(TestCase):
+    """Tests for the IngestionPayloadSerializer, specifically the turns field."""
+
+    def test_valid_turns_payload(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {
+                "turns": [
+                    {"role": "user", "author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
+                    {"role": "agent", "author": "jiffy-bot", "body": "On it!", "created_at": "2025-01-01T01:00:00Z"},
+                ],
+                "external_issue_id": "42",
+            },
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+    def test_valid_legacy_text_payload(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {"text": "Fix the bug", "external_issue_id": "42"},
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+    def test_invalid_no_text_no_turns(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {"external_issue_id": "42"},
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+
+    def test_invalid_turn_missing_role(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {
+                "turns": [
+                    {"author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
+                ],
+                "external_issue_id": "42",
+            },
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+
+    def test_invalid_turn_bad_role(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {
+                "turns": [
+                    {"role": "admin", "author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
+                ],
+                "external_issue_id": "42",
+            },
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+
+    def test_turns_and_text_both_valid(self):
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {
+                "turns": [
+                    {"role": "user", "author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
+                ],
+                "text": "Legacy text",
+                "external_issue_id": "42",
+            },
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)

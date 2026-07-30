@@ -1,22 +1,37 @@
 """Declarative callback specs per provider.
 
 Each spec describes how to call that provider's callback endpoint:
-HTTP method, auth header name/value prefix, content type, and which fields
-go in the body, query string, or headers.
+HTTP method, auth header name/value prefix, content type, any extra static
+headers, how the report text is carried in the body, and which fields go in
+the body, query string, or headers.
 
 Adding a new provider means adding a new entry here — no pipeline code changes.
 """
 
+import json
 from typing import Any
 
 PROVIDER_NAMES = ("github", "gitlab", "gitea")
 
+# GitHub requires an explicit API version header; pin it here so callbacks
+# don't silently follow whatever the API's default version becomes.
+GITHUB_API_VERSION = "2026-03-10"
+
 CALLBACK_SPECS: dict[str, dict[str, Any]] = {
+    # callback.url is the Issue Comments API:
+    # POST https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments
+    # It expects the comment markdown as JSON under "body" — not text/plain.
     "github": {
         "method": "POST",
         "auth_header": "Authorization",
         "auth_value_prefix": "Bearer ",
         "content_type": "application/json",
+        "extra_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+        "body_format": "json",
+        "body_text_field": "body",
         "body_fields": [
             "task_id",
             "status",
@@ -29,11 +44,14 @@ CALLBACK_SPECS: dict[str, dict[str, Any]] = {
         "query_fields": [],
         "header_fields": [],
     },
+    # NOTE: GitLab's Issue Notes API and Gitea's Issue Comments API also expect
+    # JSON under "body". They are left on the pre-existing plain-text behavior
+    # here on purpose — flipping them is a separate, separately-testable change.
     "gitlab": {
         "method": "POST",
         "auth_header": "Authorization",
         "auth_value_prefix": "Bearer ",
-        "content_type": "application/json",
+        "content_type": "text/plain; charset=utf-8",
         "body_fields": [
             "task_id",
             "status",
@@ -50,7 +68,7 @@ CALLBACK_SPECS: dict[str, dict[str, Any]] = {
         "method": "POST",
         "auth_header": "Authorization",
         "auth_value_prefix": "Bearer ",
-        "content_type": "application/json",
+        "content_type": "text/plain; charset=utf-8",
         "body_fields": [
             "task_id",
             "status",
@@ -73,6 +91,35 @@ def get_callback_spec(provider: str) -> dict[str, Any]:
             f"Unknown provider {provider!r}. Known providers: {', '.join(CALLBACK_SPECS)}"
         )
     return CALLBACK_SPECS[provider]
+
+
+def build_callback_headers(spec: dict[str, Any], callback_secret: str) -> dict[str, str]:
+    """Build the request headers defined by *spec*.
+
+    The secret is forwarded byte-for-byte behind the spec's auth prefix — the
+    Gateway never signs, hashes, or otherwise transforms it.
+    """
+    headers: dict[str, str] = {
+        "Content-Type": spec.get("content_type", "text/plain; charset=utf-8"),
+        spec["auth_header"]: spec["auth_value_prefix"] + callback_secret,
+    }
+    headers.update(spec.get("extra_headers", {}))
+    return headers
+
+
+def build_callback_body(spec: dict[str, Any], body_text: str) -> bytes:
+    """Encode the human-readable report *body_text* as the spec's wire body.
+
+    ``body_format: "json"`` wraps the text in a JSON object under the spec's
+    ``body_text_field`` — what a comment API such as GitHub's Issue Comments
+    endpoint expects. Anything else sends the text as raw UTF-8 bytes.
+    """
+    if spec.get("body_format") == "json":
+        field = spec.get("body_text_field", "body")
+        return json.dumps(
+            {field: body_text}, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    return body_text.encode("utf-8")
 
 
 def build_callback_payload(
@@ -135,14 +182,9 @@ def build_callback_request(
         error_message=error_message,
     )
 
-    import json
-
     body_bytes = json.dumps(body, separators=(",", ":")).encode("utf-8")
 
-    headers: dict[str, str] = {
-        "Content-Type": spec["content_type"],
-        spec["auth_header"]: spec["auth_value_prefix"] + callback_secret,
-    }
+    headers = build_callback_headers(spec, callback_secret)
 
     for field_name in spec.get("header_fields", []):
         val = {
