@@ -23,6 +23,7 @@ jobs:
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
+          JIFFY_BOT_LOGIN: ${{ vars.JIFFY_BOT_LOGIN }}
           REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
           ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
@@ -42,19 +43,31 @@ jobs:
               issue_number: issueNumber
             });
 
-            const fullText = [issue.data.body || '', ...comments.map(c => c.body || '')].join(' --- ');
+            const botLogin = process.env.JIFFY_BOT_LOGIN || '';
+
+            const turns = [
+              {
+                role: 'user',
+                author: issue.data.user.login,
+                body: issue.data.body || '',
+                created_at: issue.data.created_at,
+              },
+              ...comments.map(c => ({
+                role: c.user.login === botLogin ? 'agent' : 'user',
+                author: c.user.login,
+                body: c.body || '',
+                created_at: c.created_at,
+              })),
+            ];
 
             const repoToken = process.env.REPO_TOKEN;
             const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
             const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
-            //const callbackSecret = crypto.createHash('sha256').update(repoToken).digest('hex');
             const callbackSecret = repoToken;
-
-            console.log(`callbackSecret: ${callbackSecret}`)
 
             const payload = {
               repo: { url: repoUrl, token: repoToken, username: context.actor },
-              issue: { text: fullText, external_issue_id: String(issueNumber) },
+              issue: { turns: turns, external_issue_id: String(issueNumber) },
               callback: { url: callbackUrl, secret: callbackSecret }
             };
 

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, override_settings
 
-from jobs.execution.agent import AgentResult, build_agent_instructions, read_agent_result
+from jobs.execution.agent import AgentResult, build_agent_instructions, read_agent_result, _extract_issue_text, _format_turns
 from jobs.execution.container import (
     _extract_git_host,
     _inject_token_into_url,
@@ -22,6 +22,69 @@ from jobs.models import Task
 # ---------------------------------------------------------------------------
 # build_agent_instructions
 # ---------------------------------------------------------------------------
+
+
+class FormatTurnsTest(TestCase):
+    """Unit tests for _format_turns and _extract_issue_text."""
+
+    def test_format_turns_basic(self):
+        turns = [
+            {"role": "user", "author": "alice", "body": "Hello", "created_at": "2025-01-01T00:00:00Z"},
+            {"role": "agent", "author": "jiffy-bot", "body": "Hi there!", "created_at": "2025-01-01T01:00:00Z"},
+        ]
+        result = _format_turns(turns)
+        self.assertIn("--- Turn: User (alice) ---", result)
+        self.assertIn("Hello", result)
+        self.assertIn("--- Turn: Agent (Jiffy) (jiffy-bot) ---", result)
+        self.assertIn("Hi there!", result)
+
+    def test_format_turns_empty_body(self):
+        turns = [
+            {"role": "user", "author": "bob", "body": "", "created_at": "2025-01-01T00:00:00Z"},
+        ]
+        result = _format_turns(turns)
+        self.assertIn("bob", result)
+
+    def test_extract_issue_text_prefers_turns(self):
+        payload = {
+            "issue": {
+                "turns": [
+                    {"role": "user", "author": "alice", "body": "From turns", "created_at": "2025-01-01T00:00:00Z"},
+                ],
+                "text": "From legacy text",
+            }
+        }
+        result = _extract_issue_text(payload)
+        self.assertIn("From turns", result)
+        self.assertNotIn("From legacy text", result)
+
+    def test_extract_issue_text_falls_back_to_text(self):
+        payload = {
+            "issue": {
+                "text": "Legacy text fallback",
+            }
+        }
+        result = _extract_issue_text(payload)
+        self.assertEqual(result, "Legacy text fallback")
+
+    def test_extract_issue_text_empty_turns_list(self):
+        payload = {
+            "issue": {
+                "turns": [],
+                "text": "Fallback when turns empty",
+            }
+        }
+        result = _extract_issue_text(payload)
+        self.assertEqual(result, "Fallback when turns empty")
+
+    def test_extract_issue_text_no_issue_at_all(self):
+        result = _extract_issue_text({})
+        self.assertEqual(result, "")
+
+    def test_extract_issue_text_turns_not_a_list(self):
+        payload = {"issue": {"turns": "not_a_list"}}
+        result = _extract_issue_text(payload)
+        self.assertEqual(result, "")
 
 
 class BuildAgentInstructionsTest(TestCase):
@@ -105,6 +168,32 @@ class BuildAgentInstructionsTest(TestCase):
         self.assertIn("Technology / approach chosen", instructions)
         self.assertIn("Reasoning", instructions)
         self.assertIn("Known limitations / follow-ups", instructions)
+
+    def test_turns_preferred_over_text(self):
+        payload = {
+            "issue": {
+                "turns": [
+                    {"role": "user", "author": "alice", "body": "Fix the bug", "created_at": "2025-01-01T00:00:00Z"},
+                    {"role": "agent", "author": "jiffy-bot", "body": "On it!", "created_at": "2025-01-01T01:00:00Z"},
+                ],
+            },
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        instructions = build_agent_instructions(payload)
+        self.assertIn("Fix the bug", instructions)
+        self.assertIn("On it!", instructions)
+        self.assertIn("User (alice)", instructions)
+        self.assertIn("Agent (Jiffy) (jiffy-bot)", instructions)
+
+    def test_turns_missing_falls_back_to_text(self):
+        payload = {
+            "issue": {"text": "Legacy fallback text"},
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        instructions = build_agent_instructions(payload)
+        self.assertIn("Legacy fallback text", instructions)
 
 
 # ---------------------------------------------------------------------------
