@@ -14,9 +14,22 @@ class RepoSerializer(serializers.Serializer):
     )
 
 
+class TurnSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=["user", "agent"], help_text="Who authored this turn: 'user' (human) or 'agent' (Jiffy bot)")
+    author = serializers.CharField(max_length=200, help_text="Login/username of the turn author")
+    body = serializers.CharField(help_text="The text content of this turn")
+    created_at = serializers.DateTimeField(help_text="ISO-8601 timestamp of when this turn was created")
+
+
 class IssueSerializer(serializers.Serializer):
-    text = serializers.CharField(help_text="Full issue/thread text for the coding agent")
+    text = serializers.CharField(required=False, help_text="Full issue/thread text for the coding agent (legacy; prefer 'turns')")
+    turns = TurnSerializer(many=True, required=False, help_text="Ordered array of conversation turns with role/author metadata")
     external_issue_id = serializers.CharField(max_length=100, help_text="External issue/thread ID from the git provider")
+
+    def validate(self, data):
+        if not data.get("text") and not data.get("turns"):
+            raise serializers.ValidationError("Either 'text' or 'turns' must be provided in the issue object")
+        return data
 
 
 class CallbackSerializer(serializers.Serializer):

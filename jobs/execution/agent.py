@@ -24,13 +24,33 @@ class AgentResult(NamedTuple):
     callback: dict | None
 
 
+def _format_turns(turns: list[dict]) -> str:
+    """Format a turns array into a human-readable thread with role annotations."""
+    blocks = []
+    for t in turns:
+        role_label = "User" if t.get("role") == "user" else "Agent (Jiffy)"
+        author = t.get("author", "unknown")
+        body = t.get("body", "")
+        blocks.append(f"--- Turn: {role_label} ({author}) ---\n{body}")
+    return "\n\n".join(blocks)
+
+
+def _extract_issue_text(payload: Dict[str, Any]) -> str:
+    """Extract the issue thread text from payload, preferring structured turns over legacy text."""
+    issue = payload.get("issue", {})
+    turns = issue.get("turns")
+    if turns and isinstance(turns, list) and len(turns) > 0:
+        return _format_turns(turns)
+    return issue.get("text", "")
+
+
 def build_agent_instructions(payload: Dict[str, Any]) -> str:
     """Build the instructions text handed to the coding agent.
 
     The instructions are agent-agnostic — they describe the contract without
     assuming any particular CLI conventions.
     """
-    issue_text = payload.get("issue", {}).get("text", "")
+    issue_text = _extract_issue_text(payload)
     provider = payload.get("repo", {}).get("provider_hint", "github")
     callback_url = payload.get("callback", {}).get("url", "")
     callback_secret = payload.get("callback", {}).get("secret", "")

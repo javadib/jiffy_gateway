@@ -45,10 +45,14 @@ The workflow uses `actions/github-script@v9` to:
 
 1. Fetch the issue body via `github.rest.issues.get`.
 2. Fetch all comments via `github.paginate(github.rest.issues.listComments, ...)`.
-3. Concatenate the issue body and all comment bodies into a single text
-   block, separated by ` --- `.
+3. Build an ordered array of **turns**: the first turn is the issue body
+   (role: `"user"`, author: the issue creator), followed by each comment
+   in chronological order (role determined by comparing `comment.user.login`
+   against the `JIFFY_BOT_LOGIN` variable — `"agent"` if it matches,
+   `"user"` otherwise).
 
-This combined text is sent as `issue.text` in the payload to the Gateway.
+Each turn object includes `role`, `author`, `body`, and `created_at`.
+The turns array is sent as `issue.turns` in the payload to the Gateway.
 
 ---
 
@@ -65,7 +69,26 @@ JSON body with the following nested structure:
     "username": "octocat"
   },
   "issue": {
-    "text": "Issue body --- comment 1 text --- comment 2 text",
+    "turns": [
+      {
+        "role": "user",
+        "author": "octocat",
+        "body": "Issue body text here...",
+        "created_at": "2025-01-01T00:00:00Z"
+      },
+      {
+        "role": "user",
+        "author": "other-dev",
+        "body": "A comment from another developer",
+        "created_at": "2025-01-01T01:00:00Z"
+      },
+      {
+        "role": "agent",
+        "author": "jiffy-bot",
+        "body": "I'll take care of this!",
+        "created_at": "2025-01-01T02:00:00Z"
+      }
+    ],
     "external_issue_id": "42"
   },
   "callback": {
@@ -82,7 +105,7 @@ JSON body with the following nested structure:
 | `repo.url` | Full clone URL of the repository. |
 | `repo.token` | A GitHub PAT (or other short-lived token) with scope to clone, push, and open PRs. |
 | `repo.username` | The GitHub actor who triggered the workflow (used for attribution / audit). |
-| `issue.text` | The full issue thread text — issue body + all comment bodies — joined together. The Gateway passes this verbatim to the coding agent. |
+| `issue.turns` | Ordered array of conversation turns. The first turn is always the issue body (role `"user"`). Subsequent turns are comments in chronological order. Role is determined by comparing the comment author's login against `JIFFY_BOT_LOGIN`. Each turn contains `role`, `author`, `body`, and `created_at`. |
 | `issue.external_issue_id` | The issue number as a string. Used for deduplication and callback correlation. |
 | `callback.url` | URL where the Gateway will POST the result. For GitHub this is the Issues Comments API endpoint for the originating issue. |
 | `callback.secret` | Opaque secret that the Gateway forwards unchanged in the callback request. The receiving endpoint uses it to verify the callback is authentic. |
@@ -94,11 +117,12 @@ JSON body with the following nested structure:
 Create the following secrets in your repository's **Settings > Secrets and
 variables > Actions** page.
 
-| Secret name | Description |
-|-------------|-------------|
-| `JIFFY_GATEWAY_URL` | The base URL of your Jiffy Gateway instance (e.g. `https://jiffy.example.com`). |
-| `JIFFY_GITHUB_INGEST_TOKEN` | The shared ingestion secret for this provider / deployment. Must match the `GITHUB_INGEST_TOKEN` environment variable configured on the Gateway. Generate it with a cryptographically secure tool (see [SECRETS.md](../SECRETS.md)). |
-| `JIFFY_REPO_PAT` | A fine-grained GitHub Personal Access Token with **Contents** (read/write) and **Pull requests** (read/write) permissions, scoped to the repository. |
+| Secret / Variable name | Description |
+|------------------------|-------------|
+| `JIFFY_GATEWAY_URL` (secret) | The base URL of your Jiffy Gateway instance (e.g. `https://jiffy.example.com`). |
+| `JIFFY_GITHUB_INGEST_TOKEN` (secret) | The shared ingestion secret for this provider / deployment. Must match the `GITHUB_INGEST_TOKEN` environment variable configured on the Gateway. Generate it with a cryptographically secure tool (see [SECRETS.md](../SECRETS.md)). |
+| `JIFFY_BOT_LOGIN` (variable) | The GitHub login of the Jiffy bot account used to post replies on issues. This is used to distinguish agent replies from human comments when building the `turns` array. Set it as a repository **variable** (not a secret) in **Settings > Secrets and variables > Actions > Variables**. |
+| `JIFFY_REPO_PAT` (secret) | A fine-grained GitHub Personal Access Token with **Contents** (read/write) and **Pull requests** (read/write) permissions, scoped to the repository. |
 
 ### Why not the default `GITHUB_TOKEN`?
 
@@ -156,11 +180,11 @@ jobs:
         env:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
+          JIFFY_BOT_LOGIN: ${{ vars.JIFFY_BOT_LOGIN }}
           REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
           ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
           script: |
-            const crypto = require('crypto');
             const issueNumber = context.payload.issue.number;
 
             const issue = await github.rest.issues.get({
@@ -175,7 +199,22 @@ jobs:
               issue_number: issueNumber
             });
 
-            const fullText = [issue.data.body || '', ...comments.map(c => c.body || '')].join(' --- ');
+            const botLogin = process.env.JIFFY_BOT_LOGIN || '';
+
+            const turns = [
+              {
+                role: 'user',
+                author: issue.data.user.login,
+                body: issue.data.body || '',
+                created_at: issue.data.created_at,
+              },
+              ...comments.map(c => ({
+                role: c.user.login === botLogin ? 'agent' : 'user',
+                author: c.user.login,
+                body: c.body || '',
+                created_at: c.created_at,
+              })),
+            ];
 
             const repoToken = process.env.REPO_TOKEN;
             const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
@@ -184,7 +223,7 @@ jobs:
 
             const payload = {
               repo: { url: repoUrl, token: repoToken, username: context.actor },
-              issue: { text: fullText, external_issue_id: String(issueNumber) },
+              issue: { turns: turns, external_issue_id: String(issueNumber) },
               callback: { url: callbackUrl, secret: callbackSecret }
             };
 
