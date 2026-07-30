@@ -62,7 +62,21 @@ def build_agent_instructions(payload: Dict[str, Any]) -> str:
         provider = "gitea"
 
     spec = get_callback_spec(provider)
-    spec_json = json.dumps(spec, indent=2)
+
+    extra_header_lines = "\n".join(
+        f"  - `{name}: {value}`" for name, value in spec.get("extra_headers", {}).items()
+    ) or "  - (none beyond the auth header and Content-Type)"
+
+    if spec.get("body_format") == "json":
+        body_field = spec.get("body_text_field", "body")
+        body_description = (
+            f"a JSON object with the formatted text above as a single string "
+            f'under the `{body_field}` key, e.g. '
+            f'`{{"{body_field}": "Task #1: ✅ Jiffy completed this task.\\n..."}}`. '
+            "Escape newlines properly — it must be valid JSON."
+        )
+    else:
+        body_description = "the formatted text described above (UTF-8 encoded bytes)."
 
     return f"""\
 You are a coding agent working in an isolated sandbox environment.
@@ -116,8 +130,10 @@ You MUST attempt exactly ONE call to the callback endpoint after finishing
 your work. Make exactly ONE attempt — do not retry. If the call fails, report
 that in your result's `callback` object.
 
-The callback body must be **human-readable text** (not raw JSON) suitable for
-posting as an issue/PR comment. Use the following format:
+The report you send must be **human-readable markdown** suitable for posting
+as an issue/PR comment. Compose it in the format below, then send it exactly
+as described under "Callback endpoint details" — that section says whether it
+goes on the wire as raw text or wrapped in a JSON field.
 
 For a successful task:
 
@@ -172,10 +188,11 @@ Callback endpoint details:
 - **Method**: {spec['method']}
 - **Auth header**: `{spec['auth_header']}: {spec['auth_value_prefix']}<callback_secret>`
 - **Callback secret**: {callback_secret}
-- **Content-Type**: text/plain
-- **Body**: the formatted text described above (UTF-8 encoded bytes).
+- **Content-Type**: {spec['content_type']}
+- **Body**: {body_description}
 - **Query**: none.
-- **Headers**: none beyond the auth header and content type.
+- **Additional required headers**:
+{extra_header_lines}
 
 ## Required Final Output
 

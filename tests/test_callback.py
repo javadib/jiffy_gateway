@@ -239,7 +239,26 @@ class TestSendCallback(TestCase):
 
     @patch("apps.ingestion.callback.time.sleep")
     @patch("apps.ingestion.callback.requests.request")
-    def test_content_type_is_text_plain(self, mock_request, mock_sleep):
+    def test_github_sends_json_comment_body(self, mock_request, mock_sleep):
+        """GitHub's Issue Comments API takes JSON {"body": ...}, not text/plain."""
+        import json
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_callback(self.task, status="done", summary="Task completed")
+
+        headers = mock_request.call_args[1]["headers"]
+        self.assertEqual(headers["Content-Type"], "application/json")
+
+        payload = json.loads(mock_request.call_args[1]["data"].decode("utf-8"))
+        self.assertEqual(list(payload), ["body"])
+        self.assertIn("**Summary:** Task completed", payload["body"])
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_github_sends_api_version_and_accept_headers(self, mock_request, mock_sleep):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_request.return_value = mock_response
@@ -247,7 +266,27 @@ class TestSendCallback(TestCase):
         send_callback(self.task, status="done")
 
         headers = mock_request.call_args[1]["headers"]
+        self.assertEqual(headers["Accept"], "application/vnd.github+json")
+        self.assertEqual(headers["X-GitHub-Api-Version"], "2026-03-10")
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_gitea_still_sends_plain_text_body(self, mock_request, mock_sleep):
+        """Non-GitHub providers keep their existing plain-text behavior."""
+        self.task.provider = "gitea"
+        self.task.save()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_request.return_value = mock_response
+
+        send_callback(self.task, status="done", summary="Task completed")
+
+        headers = mock_request.call_args[1]["headers"]
         self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertNotIn("X-GitHub-Api-Version", headers)
+        self.assertTrue(
+            mock_request.call_args[1]["data"].decode("utf-8").startswith("Task #")
+        )
 
     @patch("apps.ingestion.callback.requests.request")
     def test_send_callback_with_branch_name(self, mock_request):

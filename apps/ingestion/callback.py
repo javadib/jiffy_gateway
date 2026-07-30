@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
-from jobs.callback_specs import build_callback_request, get_callback_spec
+from jobs.callback_specs import (
+    build_callback_body,
+    build_callback_headers,
+    get_callback_spec,
+)
 
 if TYPE_CHECKING:
     from jobs.models import Task
@@ -174,11 +178,11 @@ def _send_callback_via_spec(
     Shared by ``send_callback`` (Gateway-owned fallback) and the agent's own
     first-attempt logic (documented in the agent instructions).
     """
-    method, url, _headers, _ = build_callback_request(
-        spec=spec,
+    method = spec["method"]
+    url = callback_url
+
+    body_text = format_callback_body(
         task_id=task_id,
-        callback_url=callback_url,
-        callback_secret=callback_secret,
         status=status,
         summary=summary,
         technical_report=technical_report,
@@ -187,20 +191,8 @@ def _send_callback_via_spec(
         error_message=error_message,
     )
 
-    body = format_callback_body(
-        task_id=task_id,
-        status=status,
-        summary=summary,
-        technical_report=technical_report,
-        branch_name=branch_name,
-        pr_url=pr_url,
-        error_message=error_message,
-    ).encode("utf-8")
-
-    headers: dict[str, str] = {
-        "Content-Type": "text/plain; charset=utf-8",
-        spec["auth_header"]: spec["auth_value_prefix"] + callback_secret,
-    }
+    headers = build_callback_headers(spec, callback_secret)
+    body = build_callback_body(spec, body_text)
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
