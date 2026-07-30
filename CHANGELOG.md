@@ -2,6 +2,56 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-07-30)
+
+### Bug Fixes
+
+- Add HOME environment variable in Dockerfile
+  ([`0a094c0`](https://github.com/javadib/jiffy_gateway/commit/0a094c0d67bb67e3340af71ecb8ec22d2231eb34))
+
+- Add UV_CACHE_DIR environment variable in Dockerfile
+  ([`44481f6`](https://github.com/javadib/jiffy_gateway/commit/44481f6c7e68af9f1d25f91238b41568ee4cca05))
+
+- Celery worker runs as non-root; agent operates from /workspace
+  ([`2009ad1`](https://github.com/javadib/jiffy_gateway/commit/2009ad19871137dbef873b394f4b1319c7798513))
+
+- Remove image definition for jiffy-sandbox in docker-compose files
+  ([`91b66cc`](https://github.com/javadib/jiffy_gateway/commit/91b66cc38737d7d6f2edca5d0b12eeec79ac2091))
+
+- Remove unnecessary chmod command for data directory in entrypoint script
+  ([`47f1903`](https://github.com/javadib/jiffy_gateway/commit/47f1903b30a0e153c574c7310676d96bd4036da6))
+
+- Remove UV_CACHE_DIR environment variable from Dockerfile
+  ([`a37b399`](https://github.com/javadib/jiffy_gateway/commit/a37b399bb8e55c17a4c418f8de134a93b1fe761d))
+
+- Reorganize Dockerfile to streamline user creation and cache directory setup
+  ([`906576a`](https://github.com/javadib/jiffy_gateway/commit/906576a6a413a310c6d81147c3490dfeb5497f8e))
+
+- Set user to root for web and celery services in Docker Compose files
+  ([`dab1c76`](https://github.com/javadib/jiffy_gateway/commit/dab1c763da26c845e98289e46db7901a03658881))
+
+- Update PATH environment variable in Dockerfile to use /app/.local/bin
+  ([`47e83e6`](https://github.com/javadib/jiffy_gateway/commit/47e83e69449494d681cea046895ae7e6ded79bcb))
+
+### Features
+
+- Add docker-compose configuration for web and celery services
+  ([`d3562d8`](https://github.com/javadib/jiffy_gateway/commit/d3562d89a1f317833ee8133acbefb9f237a1ad23))
+
+- Replace concatenated text with structured turns array in jiffy.yml
+  ([`1292a73`](https://github.com/javadib/jiffy_gateway/commit/1292a73b4752b20bd5f2464040f9e8954bb69a9b))
+
+### Performance Improvements
+
+- Add reaction handling for issue comments and issues in Jiffy workflow
+  ([`a30e980`](https://github.com/javadib/jiffy_gateway/commit/a30e9800753fc4adcda93b44ee8c93e352a39161))
+
+### Refactoring
+
+- Enhance callback handling for GitHub and Gitea with JSON support and additional headers
+  ([`3be19ae`](https://github.com/javadib/jiffy_gateway/commit/3be19ae0b8b27cced4e50aa3bfeaf6ade3a96750))
+
+
 ## v1.5.0 (2026-07-27)
 
 ### Bug Fixes
