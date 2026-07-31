@@ -67,7 +67,7 @@ jobs:
 
             const payload = {
               repo: { url: repoUrl, token: repoToken, username: context.actor },
-              issue: { turns:  JSON.stringify(turns), external_issue_id: String(issueNumber) },
+              issue: { turns:  turns, external_issue_id: String(issueNumber) },
               callback: { url: callbackUrl, secret: callbackSecret }
             };
 
