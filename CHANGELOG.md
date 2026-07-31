@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-07-31)
+
+### Features
+
+- Add user_whitelist gating to GitHub edge workflow
+  ([`827400b`](https://github.com/javadib/jiffy_gateway/commit/827400b1b897fefa6178d39a319c117142618f90))
+
+
 ## v1.6.0 (2026-07-30)
 
 ### Bug Fixes
