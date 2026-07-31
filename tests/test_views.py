@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 from django.test import RequestFactory, TestCase
 
 from apps.ingestion.serializers import IngestionPayloadSerializer
-from apps.ingestion.views import GiteaIngestView, GitHubIngestView, GitLabIngestView
+from apps.ingestion.views import (
+    GiteaIngestView,
+    GitHubIngestView,
+    GitLabIngestView,
+    _store_payload,
+)
 from jobs.models import Task
 
 AUTH_HEADER = "HTTP_X_JIFFY_TOKEN"
@@ -415,6 +420,31 @@ class TestGiteaIngest(TestCase):
         self.assertEqual(Task.objects.count(), 1)
 
 
+class TestStorePayload(TestCase):
+    """The Redis payload must survive datetimes produced by DateTimeField."""
+
+    @patch("apps.ingestion.views.get_redis")
+    def test_stores_turn_datetimes_as_iso_strings(self, mock_redis):
+        serializer = IngestionPayloadSerializer(
+            data={
+                "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+                "issue": {
+                    "turns": [
+                        {"role": "user", "author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
+                    ],
+                    "external_issue_id": "42",
+                },
+                "callback": {"url": "https://example.com/cb", "secret": "s"},
+            }
+        )
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+        _store_payload(1, serializer.validated_data)
+
+        stored = json.loads(mock_redis.return_value.set.call_args[0][1])
+        self.assertEqual(stored["issue"]["turns"][0]["created_at"], "2025-01-01T00:00:00Z")
+
+
 class TestIngestionPayloadSerializer(TestCase):
     """Tests for the IngestionPayloadSerializer, specifically the turns field."""
 
@@ -425,6 +455,21 @@ class TestIngestionPayloadSerializer(TestCase):
                 "turns": [
                     {"role": "user", "author": "alice", "body": "Fix it", "created_at": "2025-01-01T00:00:00Z"},
                     {"role": "agent", "author": "jiffy-bot", "body": "On it!", "created_at": "2025-01-01T01:00:00Z"},
+                ],
+                "external_issue_id": "42",
+            },
+            "callback": {"url": "https://example.com/cb", "secret": "s"},
+        }
+        serializer = IngestionPayloadSerializer(data=payload)
+        self.assertTrue(serializer.is_valid(), msg=serializer.errors)
+
+    def test_valid_turn_with_blank_body(self):
+        """A GitHub issue opened with a title but no description sends body: ''."""
+        payload = {
+            "repo": {"url": "https://github.com/user/repo", "token": "tok"},
+            "issue": {
+                "turns": [
+                    {"role": "user", "author": "alice", "body": "", "created_at": "2025-01-01T00:00:00Z"},
                 ],
                 "external_issue_id": "42",
             },

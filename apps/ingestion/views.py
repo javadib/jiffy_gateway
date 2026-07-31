@@ -6,6 +6,7 @@ import logging
 import redis
 from celery import uuid as celery_uuid
 from django.conf import settings
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from rest_framework import status
 from rest_framework.request import Request
@@ -41,7 +42,9 @@ def _acquire_lock(lock_key: str) -> bool:
 def _store_payload(task_id: int, payload: dict) -> None:
     r = get_redis()
     key = f"jiffy:task:{task_id}:payload"
-    r.set(key, json.dumps(payload), ex=PAYLOAD_TTL_SECONDS)
+    # DjangoJSONEncoder renders datetimes (e.g. each turn's created_at, parsed by
+    # DateTimeField) back to ISO-8601 strings, which is what the worker expects.
+    r.set(key, json.dumps(payload, cls=DjangoJSONEncoder), ex=PAYLOAD_TTL_SECONDS)
 
 
 def _handle_ingestion(provider: str, data: dict) -> Response:

@@ -17,7 +17,10 @@ class RepoSerializer(serializers.Serializer):
 class TurnSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=["user", "agent"], help_text="Who authored this turn: 'user' (human) or 'agent' (Jiffy bot)")
     author = serializers.CharField(max_length=200, help_text="Login/username of the turn author")
-    body = serializers.CharField(help_text="The text content of this turn")
+    body = serializers.CharField(
+        allow_blank=True,
+        help_text="The text content of this turn (may be blank — GitHub issues and comments can have an empty body)",
+    )
     created_at = serializers.DateTimeField(help_text="ISO-8601 timestamp of when this turn was created")
 
 
