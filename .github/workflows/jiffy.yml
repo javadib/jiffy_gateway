@@ -104,6 +104,13 @@ jobs:
               })),
             ];
 
+            if (botLogin) {
+              const authorInstruction =
+                `\n\n[Jiffy instruction] Use \`${botLogin}\` as the git commit author and committer name ` +
+                `for all commits and pushes made for this task.`;
+              turns[0].body = `${turns[0].body || ''}${authorInstruction}`;
+            }
+
             const repoToken = process.env.REPO_TOKEN;
             const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
             const callbackUrl = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}/comments`;
