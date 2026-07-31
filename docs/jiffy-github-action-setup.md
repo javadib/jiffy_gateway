@@ -123,6 +123,7 @@ variables > Actions** page.
 | `JIFFY_GITHUB_INGEST_TOKEN` (secret) | The shared ingestion secret for this provider / deployment. Must match the `GITHUB_INGEST_TOKEN` environment variable configured on the Gateway. Generate it with a cryptographically secure tool (see [SECRETS.md](../SECRETS.md)). |
 | `JIFFY_BOT_LOGIN` (variable) | The GitHub login of the Jiffy bot account used to post replies on issues. This is used to distinguish agent replies from human comments when building the `turns` array. Set it as a repository **variable** (not a secret) in **Settings > Secrets and variables > Actions > Variables**. |
 | `JIFFY_REPO_PAT` (secret) | A fine-grained GitHub Personal Access Token with **Contents** (read/write) and **Pull requests** (read/write) permissions, scoped to the repository. |
+| `JIFFY_USER_WHITELIST` (variable, optional) | The `user_whitelist` config option for the Jiffy workflow (`jiffy.ci`). A comma-separated list of GitHub usernames allowed to trigger Jiffy. If undefined or empty, Jiffy is disabled in the repository (see [section 6](#6-optional-restrict-who-can-trigger-jiffy-user_whitelist)). Set it as a repository **variable** (not a secret). |
 
 ### Why not the default `GITHUB_TOKEN`?
 
@@ -135,7 +136,40 @@ expires. A shorter expiry is safer; set a calendar reminder to rotate.
 
 ---
 
-## 6. Required permissions block
+## 6. Optional: restrict who can trigger Jiffy (`user_whitelist`)
+
+By default, any GitHub user can trigger a Jiffy task by mentioning the bot.
+If you want to restrict triggering to a specific set of users, configure the
+`user_whitelist` option in the Jiffy workflow config (`jiffy.ci`). The list
+is read from a repository **variable** named `JIFFY_USER_WHITELIST`.
+
+### Config example
+
+1. Open **Settings → Secrets and variables → Actions → Variables** in your repository.
+2. Add a variable named `JIFFY_USER_WHITELIST`.
+3. Set its value to a comma-separated list of GitHub usernames:
+
+```
+JIFFY_USER_WHITELIST: octocat, jane-doe
+```
+
+Usernames are compared case-insensitively, and both comma- and
+whitespace-separated values are accepted.
+
+### How the workflow behaves
+
+| `user_whitelist` value | Behavior |
+|------------------------|----------|
+| Undefined or empty | The request is **not** forwarded to the Gateway. The workflow posts a single comment on the Issue explaining that no whitelist is configured and how to set `JIFFY_USER_WHITELIST`. The comment is posted at most once per Issue. |
+| Defined and the mentioning user is in the list | Existing behavior — the full Issue thread is forwarded to the Gateway, no change. |
+| Defined and the mentioning user is **not** in the list | Nothing happens — no comment, no forwarding. Fully silent. |
+
+The whitelist check happens entirely in the edge component (the GitHub Action);
+the Gateway is unaware of this concept.
+
+---
+
+## 7. Required permissions block
 
 The workflow must declare the following top-level `permissions` so the
 `actions/github-script` step can read issues, list comments, and (via the
@@ -150,7 +184,7 @@ permissions:
 
 ---
 
-## 7. Complete working example
+## 8. Complete working example
 
 Below is the current version of `jiffy.yml` that you can copy directly:
 
@@ -181,11 +215,56 @@ jobs:
           JIFFY_URL: ${{ secrets.JIFFY_GATEWAY_URL }}
           JIFFY_INGEST_TOKEN: ${{ secrets.JIFFY_GITHUB_INGEST_TOKEN }}
           JIFFY_BOT_LOGIN: ${{ vars.JIFFY_BOT_LOGIN }}
+          JIFFY_USER_WHITELIST: ${{ vars.JIFFY_USER_WHITELIST }}
           REPO_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
           ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         with:
           script: |
+            const crypto = require('crypto');
             const issueNumber = context.payload.issue.number;
+
+            const whitelist = (process.env.JIFFY_USER_WHITELIST || '')
+              .split(/[\s,]+/)
+              .map((login) => login.trim().toLowerCase())
+              .filter(Boolean);
+            const mentionerLogin = String(context.actor || '').toLowerCase();
+            const whitelistNoticeMarker = 'no `user_whitelist` is configured';
+
+            if (whitelist.length === 0) {
+              const existingComments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+              const alreadyNotified = existingComments.some((comment) =>
+                (comment.body || '').includes(whitelistNoticeMarker)
+              );
+              if (!alreadyNotified) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: [
+                    'Jiffy can\'t run in this repository yet — no `user_whitelist` is configured.',
+                    '',
+                    'To enable Jiffy, set the `user_whitelist` option in the Jiffy workflow config (the `jiffy.ci` GitHub Action):',
+                    '',
+                    '1. Open **Settings → Secrets and variables → Actions → Variables** in this repository.',
+                    '2. Add a repository variable named `JIFFY_USER_WHITELIST`.',
+                    '3. Set it to a comma-separated list of GitHub usernames allowed to trigger Jiffy, e.g. `octocat, jane-doe`.',
+                    '',
+                    'Only listed usernames can trigger tasks. Once configured, mention the bot again on this issue to try.'
+                  ].join('\n')
+                });
+              }
+              console.log('user_whitelist is empty or unset; skipping dispatch to the Jiffy Gateway.');
+              return;
+            }
+
+            if (!whitelist.includes(mentionerLogin)) {
+              console.log(`@${context.actor} is not in user_whitelist; skipping dispatch to the Jiffy Gateway.`);
+              return;
+            }
 
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
@@ -245,7 +324,7 @@ jobs:
 
 ---
 
-## 8. Common pitfalls
+## 9. Common pitfalls
 
 ### Token expiry causing push / callback failures
 
