@@ -84,10 +84,6 @@ jobs:
             console.log(`HTTP Status: ${response.status}`);
             console.log(responseText);
 
-            const responseText = await response.text();
-            console.log(`HTTP Status: ${response.status}`);
-            console.log(responseText);
-
             if (response.status >= 400) {
               core.setFailed(`Jiffy ingestion failed with status ${response.status}: ${responseText}`);
             } else {
