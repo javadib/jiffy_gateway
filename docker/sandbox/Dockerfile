@@ -164,6 +164,26 @@ export PATH="/usr/local/bin:$PATH"\n\
     && chmod +x /home/jiffy/.profile \
     && chown jiffy:jiffy /home/jiffy/.profile
 
+# --- npm/pnpm network resilience ---
+# The sandbox egress to the npm registry can be slow/throttled. pnpm's default
+# fetch-timeout is 60s; large tarball downloads (e.g. next, sharp) can exceed it,
+# which aborts the request with a DOMException TIMEOUT_ERR ("error (23)") and
+# retries/retries-out. pnpm v11 only reads network settings like these from its
+# own global config file (~/.config/pnpm/config.yaml), NOT from ~/.npmrc, so
+# raise the timeout and reduce concurrency there so installs complete reliably
+# on a slow link.
+# dangerouslyAllowAllBuilds restores the classic behavior of running postinstall
+# scripts (needed by husky, esbuild, sharp, etc.) inside the trusted sandbox.
+RUN mkdir -p /home/jiffy/.config/pnpm \
+    && printf 'fetchTimeout: 600000\n\
+fetchRetries: 3\n\
+fetchRetryMintimeout: 10000\n\
+fetchRetryMaxtimeout: 60000\n\
+networkConcurrency: 6\n\
+dangerouslyAllowAllBuilds: true\n\
+' > /home/jiffy/.config/pnpm/config.yaml \
+    && chown -R jiffy:jiffy /home/jiffy/.config
+
 # 6. OpenCode config placeholder
 #    Creates a minimal default config at the standard OpenCode global config path.
 #    This file is expected to be overridden at runtime via a volume mount:
