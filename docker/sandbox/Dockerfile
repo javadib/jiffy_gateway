@@ -56,6 +56,17 @@ RUN bash -c '. /etc/profile.d/nvm.sh \
 
 RUN node --version && npm --version
 
+# --- pnpm via corepack ---
+# Installed at build time (as root) so the non-root user has access without
+# permission errors. corepack is bundled with Node.js >= 16.10 / npm >= 8.3.
+RUN bash -c '. /etc/profile.d/nvm.sh \
+    && NODE_BIN_DIR="$(dirname "$(nvm which ${NODE_VERSION})")" \
+    && corepack enable \
+    && corepack prepare pnpm@latest --activate \
+    && ln -sf "$NODE_BIN_DIR/pnpm" /usr/local/bin/pnpm \
+    && ln -sf "$NODE_BIN_DIR/pnpx" /usr/local/bin/pnpx \
+    && pnpm --version'
+
 # --- uv (Python package/version manager) ---
 # Installed to $HOME/.local/bin by default; add to PATH explicitly.
 # UV_PYTHON_INSTALL_DIR directs Python installs to a system-wide location
@@ -167,6 +178,7 @@ RUN echo "=== Language Runtime Verification ===" \
     && python3 --version \
     && node --version \
     && npm --version \
+    && pnpm --version \
     && go version \
     && echo "=== All runtimes verified ==="
 
