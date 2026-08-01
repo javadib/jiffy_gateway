@@ -360,6 +360,14 @@ def start_generic_sandbox_container(
         }
         if restricted:
             run_kwargs["cap_add"] = ["NET_ADMIN"]
+            # Docker only provides the 127.0.0.11 embedded DNS resolver (which
+            # the restriction script allow-lists) to containers on a
+            # user-defined network. On the default "bridge" network, Docker
+            # instead copies the host's own resolv.conf nameservers into the
+            # container — those aren't allow-listed, so once the DROP policy
+            # is in place ALL DNS resolution breaks, including for
+            # allow-listed hosts.
+            run_kwargs["network"] = _ensure_network(client)
 
         container = client.containers.run(settings.SANDBOX_IMAGE, **run_kwargs)
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
