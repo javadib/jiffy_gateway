@@ -5,8 +5,8 @@
 # and the OpenCode agent CLI are installed and functional.
 #
 # Usage:
-  #   docker build -t jiffy-sandbox:1.1.0 .
-#   docker run --rm jiffy-sandbox:1.1.0 bash /smoke-test.sh
+  #   docker build -t jiffy-sandbox:1.2.0 .
+#   docker run --rm jiffy-sandbox:1.2.0 bash /smoke-test.sh
 set -euo pipefail
 
 PASS=0
@@ -112,6 +112,14 @@ if command -v tea >/dev/null 2>&1; then
   tea version >/dev/null 2>&1 && pass "tea is installed and responds to version" || fail "tea version failed"
 else
   skip "tea not installed (optional)"
+fi
+
+echo ""
+echo "--- iptables ---"
+if command -v iptables >/dev/null 2>&1; then
+  pass "iptables is installed (network egress restriction)"
+else
+  fail "iptables not found"
 fi
 
 # --- OpenCode agent CLI ---

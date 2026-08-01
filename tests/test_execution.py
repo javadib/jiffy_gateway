@@ -9,11 +9,15 @@ from django.test import TestCase, override_settings
 
 from jobs.execution.agent import AgentResult, build_agent_instructions, read_agent_result, _extract_issue_text, _format_turns
 from jobs.execution.container import (
+    _apply_network_restriction,
+    _build_network_restriction_script,
+    _effective_network_allowlist,
     _extract_git_host,
     _inject_token_into_url,
     _redact_url,
     ensure_sandbox_image,
     get_docker_client,
+    start_generic_sandbox_container,
 )
 from jobs.execution.exceptions import ContainerError
 from jobs.models import Task
@@ -935,3 +939,161 @@ class ExecuteTaskLoggingTest(TestCase):
                 record.getMessage(),
                 f"Callback secret leaked in log: {record.getMessage()}",
             )
+
+
+# ---------------------------------------------------------------------------
+# Network egress restriction
+# ---------------------------------------------------------------------------
+
+
+class NetworkRestrictionTest(TestCase):
+    """Unit tests for the sandbox network egress restriction."""
+
+    def test_effective_allowlist_defaults(self):
+        allowlist = _effective_network_allowlist()
+        self.assertIn("pypi.org", allowlist)
+        self.assertIn("registry.npmjs.org", allowlist)
+        self.assertIn("github.com", allowlist)
+        self.assertIn("crates.io", allowlist)
+
+    @override_settings(SANDBOX_NETWORK_ALLOWLIST_EXTRA=["git.example.com", "llm.example.com"])
+    def test_effective_allowlist_appends_extra(self):
+        allowlist = _effective_network_allowlist()
+        self.assertIn("git.example.com", allowlist)
+        self.assertIn("llm.example.com", allowlist)
+        self.assertIn("pypi.org", allowlist)
+
+    @override_settings(
+        SANDBOX_NETWORK_ALLOWLIST=["one.example.com"],
+        SANDBOX_NETWORK_ALLOWLIST_EXTRA=["two.example.com", "one.example.com"],
+    )
+    def test_effective_allowlist_dedups_and_keeps_order(self):
+        allowlist = _effective_network_allowlist()
+        self.assertEqual(allowlist, ["one.example.com", "two.example.com"])
+
+    @override_settings(
+        SANDBOX_NETWORK_ALLOWLIST=["Mixed.Case.Example.com"],
+        SANDBOX_NETWORK_ALLOWLIST_EXTRA=["mixed.case.example.com"],
+    )
+    def test_effective_allowlist_normalises_case(self):
+        allowlist = _effective_network_allowlist()
+        self.assertEqual(allowlist, ["mixed.case.example.com"])
+
+    def test_script_allows_default_hosts_and_drops_rest(self):
+        script = _build_network_restriction_script(["pypi.org", "github.com"])
+        self.assertIn("iptables -P OUTPUT DROP", script)
+        self.assertIn("getent ahostsv4 'pypi.org'", script)
+        self.assertIn("getent ahostsv4 'github.com'", script)
+        self.assertIn("-o lo -j ACCEPT", script)
+        self.assertIn("--ctstate ESTABLISHED,RELATED -j ACCEPT", script)
+        # DNS to Docker's embedded resolver is allowed so allowlisted hosts resolve.
+        self.assertIn("--dport 53 -d 127.0.0.11 -j ACCEPT", script)
+
+    def test_script_escapes_hosts(self):
+        script = _build_network_restriction_script(["a'b.com"])
+        self.assertIn("getent ahostsv4 'a'\\''b.com'", script)
+
+    def test_apply_network_restriction_success(self):
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.exec_run.return_value = (0, (b"ok", b""))
+        _apply_network_restriction(container, ["pypi.org"], task_id=7)
+        container.exec_run.assert_called_once()
+        _, kwargs = container.exec_run.call_args
+        self.assertEqual(kwargs["user"], "root")
+        self.assertTrue(kwargs["demux"])
+
+    def test_apply_network_restriction_failure_raises(self):
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.exec_run.return_value = (1, (b"", b"iptables: Permission denied"))
+        with self.assertRaises(ContainerError) as ctx:
+            _apply_network_restriction(container, ["pypi.org"], task_id=7)
+        self.assertIn("Failed to apply sandbox network restriction", str(ctx.exception))
+        self.assertIn("Permission denied", str(ctx.exception))
+
+    def _mock_container_start(self, docker_client):
+        client = MagicMock()
+        docker_client.return_value = client
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.id = "a" * 64
+        container.exec_run.return_value = (0, (b"ok", b""))
+        client.containers.run.return_value = container
+        return client, container
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_start_container_restricted_by_default(self, mock_client):
+        client, container = self._mock_container_start(mock_client)
+
+        with override_settings(SANDBOX_CLEANUP=False):
+            with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}) as started:
+                self.assertEqual(started, container)
+
+        run_kwargs = client.containers.run.call_args
+        self.assertEqual(run_kwargs.args[0], "jiffy-sandbox:1.2.0")
+        self.assertEqual(run_kwargs.kwargs["cap_add"], ["NET_ADMIN"])
+        env = run_kwargs.kwargs["environment"]
+        self.assertEqual(env["JIFFY_SANDBOX_NETWORK_RESTRICTED"], "true")
+        self.assertIn("pypi.org", env["JIFFY_SANDBOX_NETWORK_ALLOWLIST"])
+        # Restriction rules applied before yield via a root exec.
+        root_execs = [c for c in container.exec_run.call_args_list if c.kwargs.get("user") == "root"]
+        self.assertEqual(len(root_execs), 1)
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_start_container_unrestricted_skips_cap_and_rules(self, mock_client):
+        client, container = self._mock_container_start(mock_client)
+
+        with override_settings(SANDBOX_CLEANUP=False, SANDBOX_NETWORK_RESTRICTED=False):
+            with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}) as started:
+                self.assertEqual(started, container)
+
+        run_kwargs = client.containers.run.call_args
+        self.assertNotIn("cap_add", run_kwargs.kwargs)
+        env = run_kwargs.kwargs["environment"]
+        self.assertEqual(env["JIFFY_SANDBOX_NETWORK_RESTRICTED"], "false")
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_start_container_restriction_failure_fails_closed(self, mock_client):
+        client = MagicMock()
+        mock_client.return_value = client
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.id = "a" * 64
+        container.exec_run.return_value = (1, (b"", b"iptables: Permission denied"))
+        client.containers.run.return_value = container
+
+        with override_settings(SANDBOX_CLEANUP=False):
+            with self.assertRaises(ContainerError) as ctx:
+                with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}):
+                    self.fail("should not yield when restriction cannot be applied")
+
+        self.assertIn("Failed to apply sandbox network restriction", str(ctx.exception))
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_start_container_logs_restriction_state(self, mock_client):
+        mock_client.return_value = MagicMock()
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.id = "a" * 64
+        container.exec_run.return_value = (0, (b"ok", b""))
+        mock_client.return_value.containers.run.return_value = container
+
+        with override_settings(SANDBOX_CLEANUP=False):
+            with self.assertLogs("jobs.execution.container", level="INFO") as cm:
+                with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}):
+                    pass
+
+        messages = [r.getMessage() for r in cm.records]
+        active = [m for m in messages if "Network restriction ACTIVE" in m]
+        self.assertTrue(active, "Expected an ACTIVE restriction log line")
+        self.assertIn("pypi.org", active[0])
+
+        with override_settings(SANDBOX_CLEANUP=False, SANDBOX_NETWORK_RESTRICTED=False):
+            with self.assertLogs("jobs.execution.container", level="INFO") as cm:
+                with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}):
+                    pass
+
+        messages = [r.getMessage() for r in cm.records]
+        disabled = [m for m in messages if "Network restriction DISABLED" in m]
+        self.assertTrue(disabled, "Expected a DISABLED restriction log line")

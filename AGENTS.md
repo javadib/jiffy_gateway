@@ -196,7 +196,7 @@ Keep DB writes (`update_status`) short and outside of any long-held lock or open
 - The generic image bundles: **Python, Node.js, and Go** runtimes, plus **git, the coding agent CLI, curl, and build-essential**. This set is fixed and shared — it is not selected or customized per task.
 - **No pre-container language/version detection.** There is only one image, so there is nothing to select.
 - **The agent is responsible for self-provisioning at runtime.** Whatever the task needs beyond the generic set (a specific language/runtime version, a package, a system library) is installed by the agent itself as part of doing the work — this is not a separate Gateway-orchestrated phase (see End-to-End Flow).
-- **Network policy is intentionally broader than a single-language image would need**: an allow-list covering the common registries for the languages in the generic image (PyPI, npm, Go proxy, relevant apt mirrors) plus the git remote for the target provider — not a fully open internet, but wider than "only this one language's registry."
+- **Network policy is intentionally broader than a single-language image would need**: an allow-list covering the common registries for the languages in the generic image (PyPI, npm, Go proxy, crates.io) plus the git remote hosts for each provider in use — not a fully open internet, but wider than "only this one language's registry." The list is enforced by default via per-container `iptables` rules and is configurable (including a full debug bypass); see `docker/sandbox/README.md`.
 - Phase-one monorepo assumption (single primary language/target per task) still holds.
 
 ## Agent Instruction Contract — Important
@@ -230,7 +230,7 @@ Keep the instruction-building logic (`build_agent_instructions`) in one place, a
 ## Container Execution
 
 - One Docker container per job, using the **generic sandbox image** (see Generic Sandbox Image above) — never built or customized at runtime.
-- Run with `remove=True` (auto-cleanup), explicit `mem_limit` and `cpus`, and a network allow-list covering the registries/toolchains needed for the languages in the generic image, plus the target provider's git remote.
+- Run with `remove=True` (auto-cleanup), explicit `mem_limit` and `cpus`. **Network egress is restricted by default**: the container is started with the `NET_ADMIN` capability and lightweight `iptables` rules (inside the container's own network namespace) allow connections only to the configured allow-list (see `docker/sandbox/README.md`). The restriction can be fully disabled for debugging with `JIFFY_SANDBOX_NETWORK_RESTRICTED=false`; when active and it cannot be applied, the run fails closed. Each run logs whether restriction is active and the effective allow-list used.
 - `/workspace` inside the container holds the cloned repo; inject the repo token and any other needed context as environment variables at container start, never baked into the image.
 - The agent has everything it needs inside the container (git, the repo token, provider CLI/tooling) to commit, push, and open a PR itself — the Gateway does not perform these as separate host-side or Gateway-authored steps.
 - The container is destroyed immediately after the agent finishes and its result has been read — the token's exposure window is the lifetime of this single container run.
