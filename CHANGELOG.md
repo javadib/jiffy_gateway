@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-07-31)
+
+### Features
+
+- Instruct agent to use JIFFY_BOT_LOGIN as git author in GitHub edge workflow
+  ([`f8e09ab`](https://github.com/javadib/jiffy_gateway/commit/f8e09ab9b3172cb0a83a43264885ef58ff284781))
+
+
 ## v1.7.0 (2026-07-31)
 
 ### Features

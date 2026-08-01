@@ -2,12 +2,17 @@
 #
 # One generic image for all tasks — includes version managers (nvm, uv, gvm)
 # for Node.js/Python/Go, git provider CLIs (gh, glab, tea), git, curl,
-# build-essential, and the OpenCode coding agent CLI.
+# build-essential, iptables (for egress restriction), and the OpenCode coding
+# agent CLI.
 #
 # The agent is responsible for installing specific language/runtime versions
 # at runtime via the version managers, and for any additional dependencies.
 #
-# Build: docker build -t jiffy-sandbox:1.1.0 .
+# Network egress restriction (enabled by default via JIFFY_SANDBOX_NETWORK_RESTRICTED)
+# is applied at container start by the Gateway using iptables inside the
+# container's own network namespace; see docker/sandbox/README.md.
+#
+# Build: docker build -t jiffy-sandbox:1.2.0 .
 # The image tag used at runtime is read from SANDBOX_IMAGE env var.
 
 FROM debian:bookworm-20260713
@@ -30,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     gnupg \
+    iptables \
     && mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 

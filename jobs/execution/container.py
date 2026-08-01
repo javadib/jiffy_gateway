@@ -23,6 +23,12 @@ AGENT_RESULT_PATH = "/workspace/.jiffy_result.json"
 # Path to the sandbox Dockerfile, relative to the project root.
 SANDBOX_DOCKERFILE_DIR = Path(__file__).resolve().parent.parent.parent / "docker" / "sandbox"
 
+# Docker's embedded DNS resolver, reachable from every container on the
+# default bridge network.  DNS queries are allowed so the agent can resolve
+# allowlisted hosts; actual connections to non-allowlisted destinations are
+# still dropped by the OUTPUT rules.
+DOCKER_EMBEDDED_DNS = "127.0.0.11"
+
 
 # ---------------------------------------------------------------------------
 # Docker client construction
@@ -123,7 +129,7 @@ def ensure_sandbox_image() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Network helpers
+# Network restriction helpers
 # ---------------------------------------------------------------------------
 
 
@@ -136,9 +142,96 @@ def _extract_git_host(repo_url: str) -> str | None:
         return None
 
 
-def _build_network_config(repo_url: str) -> dict:
-    """Build Docker network configuration for the sandbox container."""
-    return {}
+def _effective_network_allowlist() -> list[str]:
+    """Return the effective, de-duplicated allow-list for sandbox egress.
+
+    Merges ``SANDBOX_NETWORK_ALLOWLIST`` (the defaults, or a full override)
+    with ``SANDBOX_NETWORK_ALLOWLIST_EXTRA`` (appended additions for
+    self-hosted git servers and per-install LLM provider endpoints).
+    """
+    base = list(getattr(settings, "SANDBOX_NETWORK_ALLOWLIST", []))
+    extra = list(getattr(settings, "SANDBOX_NETWORK_ALLOWLIST_EXTRA", []))
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in base + extra:
+        host = raw.strip().lower()
+        if host and host not in seen:
+            seen.add(host)
+            result.append(host)
+    return result
+
+
+def _build_network_restriction_script(allowlist: list[str]) -> str:
+    """Build a bash script that restricts container egress via iptables.
+
+    The script runs as root inside the container (which must be started with
+    the ``NET_ADMIN`` capability).  It allows loopback traffic, replies to
+    established connections, DNS queries to Docker's embedded resolver, and
+    connections to the IPs of each allowlisted host.  Everything else is
+    dropped via a default-deny OUTPUT policy.
+
+    Hosts are resolved at container start so IP changes (e.g. CDN backends)
+    are picked up per run.  This is intentionally lightweight — plain
+    ``iptables`` available in the Debian bookworm base image, no extra infra.
+    """
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        "",
+        "# Flush any existing OUTPUT rules (fresh container).",
+        "iptables -F OUTPUT",
+        "",
+        "# Allow loopback traffic.",
+        "iptables -A OUTPUT -o lo -j ACCEPT",
+        "",
+        "# Allow replies to established connections.",
+        "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "",
+        "# Allow DNS queries to Docker's embedded resolver.",
+        f"iptables -A OUTPUT -p udp --dport 53 -d {DOCKER_EMBEDDED_DNS} -j ACCEPT",
+        f"iptables -A OUTPUT -p tcp --dport 53 -d {DOCKER_EMBEDDED_DNS} -j ACCEPT",
+        "",
+        "# Allow connections to allowlisted hosts.",
+    ]
+    for host in allowlist:
+        safe_host = host.replace("'", "'\\''")
+        lines.append(
+            "for ip in $(getent ahostsv4 '{host}' 2>/dev/null | awk '{{print $1}}' | sort -u); do "
+            "iptables -A OUTPUT -d \"$ip\" -j ACCEPT; done".format(host=safe_host)
+        )
+    lines += [
+        "",
+        "# Default-deny all other egress.",
+        "iptables -P OUTPUT DROP",
+        "iptables -A OUTPUT -j DROP",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _apply_network_restriction(container: Container, allowlist: list[str], task_id: int = 0) -> None:
+    """Apply iptables egress restriction inside the container.
+
+    Runs as root (the sandbox image's default user is non-root) — the
+    container must be started with the ``NET_ADMIN`` capability.  Raises
+    ``ContainerError`` if the rules cannot be applied so the caller fails
+    closed rather than silently running an unrestricted sandbox.
+    """
+    script = _build_network_restriction_script(allowlist)
+    exit_code, (output, err) = container.exec_run(
+        cmd=["bash", "-c", script],
+        user="root",
+        demux=True,
+    )
+    if exit_code != 0:
+        detail = (err or output or b"").decode(errors="replace").strip()
+        raise ContainerError(
+            f"Failed to apply sandbox network restriction (exit {exit_code}): {detail}"
+        )
+    logger.info(
+        "[%d] Network restriction applied — egress limited to %d allowlisted host(s)",
+        task_id,
+        len(allowlist),
+    )
 
 
 def _ensure_network(client: docker.DockerClient) -> str:
@@ -154,9 +247,6 @@ def _ensure_network(client: docker.DockerClient) -> str:
         )
         logger.info("Created Docker network %s", network_name)
     return network_name
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +309,33 @@ def start_generic_sandbox_container(
 
     Manages the full lifecycle: start, yield for use, stop, and remove.
     On any error the container is always cleaned up.
+
+    When network restriction is active (the default) the container is started
+    with the ``NET_ADMIN`` capability and iptables egress rules are applied
+    before the job proceeds.  If the restriction cannot be applied the
+    container is torn down and a ``ContainerError`` is raised — the sandbox
+    never silently runs unrestricted.
     """
     client = get_docker_client()
     container = None
     try:
+        effective_allowlist = _effective_network_allowlist()
+        restricted = settings.SANDBOX_NETWORK_RESTRICTED
+
+        if restricted:
+            logger.info(
+                "[%d] Network restriction ACTIVE — egress limited to %d allowlisted host(s): %s",
+                task_id,
+                len(effective_allowlist),
+                ", ".join(effective_allowlist) or "(none)",
+            )
+        else:
+            logger.info(
+                "[%d] Network restriction DISABLED (JIFFY_SANDBOX_NETWORK_RESTRICTED=false) — "
+                "sandbox has open network egress",
+                task_id,
+            )
+
         logger.info(
             "[%d] Starting sandbox container (image=%s, mem=%s, cpus=%s)",
             task_id,
@@ -230,27 +343,35 @@ def start_generic_sandbox_container(
             settings.SANDBOX_MEM_LIMIT,
             settings.SANDBOX_CPU_LIMIT,
         )
-        # _ensure_network(client)
 
-        # networking_config = {}
-        # if repo_url:
-        #     networking_config = _build_network_config(repo_url)
+        # Surface the restriction config to the container so the startup
+        # report (and anything inside) can log it.  No secrets here.
+        container_env = dict(env_vars)
+        container_env["JIFFY_SANDBOX_NETWORK_RESTRICTED"] = "true" if restricted else "false"
+        container_env["JIFFY_SANDBOX_NETWORK_ALLOWLIST"] = ",".join(effective_allowlist)
 
-        container = client.containers.run(
-            settings.SANDBOX_IMAGE,
-            detach=True,
-            remove=False,
-            tty=True,
-            mem_limit=settings.SANDBOX_MEM_LIMIT,
-            cpuset_cpus=str(settings.SANDBOX_CPU_LIMIT),
-            environment=env_vars,
-            # network="jiffy-sandbox-net",
-            # **networking_config,
-        )
+        run_kwargs: Dict[str, Any] = {
+            "detach": True,
+            "remove": False,
+            "tty": True,
+            "mem_limit": settings.SANDBOX_MEM_LIMIT,
+            "cpuset_cpus": str(settings.SANDBOX_CPU_LIMIT),
+            "environment": container_env,
+        }
+        if restricted:
+            run_kwargs["cap_add"] = ["NET_ADMIN"]
+
+        container = client.containers.run(settings.SANDBOX_IMAGE, **run_kwargs)
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
 
         # Inject OpenCode config into the sandbox container
         _inject_opencode_config(container, task_id)
+
+        # Apply egress restriction before handing the container to the job.
+        # Fail closed: if the rules cannot be applied, raise so the job never
+        # runs against an (intended to be) restricted sandbox.
+        if restricted:
+            _apply_network_restriction(container, effective_allowlist, task_id=task_id)
 
         yield container
         logger.info("[%d] Container %s finished (id=%s)", task_id, container.short_id, container.id[:12])

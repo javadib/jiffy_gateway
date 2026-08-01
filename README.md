@@ -32,6 +32,7 @@ Issue mention ──▶ Edge check (Action) ──▶ gateway ──▶ Queue �
 - 🧠 **Model-agnostic execution**: bring your own coding agent/LLM backend instead of being locked to one vendor.
 - 🏠 **Fully self-hosted**: runs on your own infrastructure — no code ever needs to leave your network unless you configure it to.
 - 🔒 **Isolated execution**: every task runs in an ephemeral, resource-limited container, so nothing outside its sandbox can be affected.
+- 🌐 **Restricted by default**: sandbox network egress is limited to an allow-list of package registries and git providers by default, with env-var overrides for self-hosted git servers and LLM endpoints (see [`docker/sandbox/README.md`](docker/sandbox/README.md)).
 - 🚦 **No noise, low overhead**: mention-detection happens at the edge (in your repo's own CI, or the relevant channel's own filter), so only validated requests ever reach the gateway — designed for low request volumes (hundreds/day), not massive scale.
 - 🌿 **Automatic branch naming**: generates a sensible branch name from the task when you don't provide one.
 - 📊 **Traceable task status**: every task's state (queued, running, done, failed) is tracked and inspectable.
