@@ -10,7 +10,7 @@ Instead, report it privately using one of these channels:
    Go to the [Security tab](https://github.com/javadib/jiffy_gateway/security) of the repository and click **"Report a vulnerability"**. This opens a private advisory visible only to maintainers, where you can describe the issue and collaborate on a fix before any disclosure.
 
 2. **Email**
-   If private reporting isn't available to you, email `security@<your-domain>` with details. *(Replace with the project's actual security contact address.)*
+   If private reporting isn't available to you, email `javadib67@gmail.com` with details. *(Replace with the project's actual security contact address.)*
 
 ### What to Include
 
