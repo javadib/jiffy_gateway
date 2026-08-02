@@ -42,9 +42,9 @@ Don't interrogate the person with every question on the list like a form — ask
 
 **Use an interactive choice tool for this, not plain text, whenever the question has a small set of likely answers** — for example `ask_user_input_v0` in Claude's consumer apps, which shows tappable options instead of requiring the person to type. This applies to role selection, any multiple-choice detail from the reference files, and anything else with clean options. Reserve plain text for things that can't be reduced to options — the free-form task description itself, the repo URL, or a person's reasons for rejecting a plan. If no such interactive tool exists in your environment, fall back to plain text with clearly enumerated options.
 
-## Step 3 — Plan it, then get approval through a pop-up
+## Step 3 — Plan it, then get approval in plain text
 
-Present the plan **concisely**: a one-line summary plus a short bulleted list of the actual task titles/scope items — not long prose. For example:
+Present the plan **concisely**: a one-line summary plus a short bulleted list of the actual task titles/scope items — not long prose. The plan and the confirmation exchange may stay in whatever language the person is chatting in. For example:
 
 ```
 خلاصه: جلوگیری از دوبار-کلیک روی دکمه ثبت‌نام
@@ -54,14 +54,14 @@ Present the plan **concisely**: a one-line summary plus a short bulleted list of
 خارج از scope: تغییرات idempotency سمت بک‌اند
 ```
 
-Immediately follow this with an interactive pop-up asking for approval — options like "تایید می‌کنم" and "نیاز به تغییر دارم". This is a hard checkpoint: don't draft the Issue until you get a clear approval.
+Immediately follow this with a **plain-text confirmation prompt** — never a pop-up, widget, selectable card, or any other interactive UI element. Ask the person, in their own words, to either confirm the plan or reply with the corrections / a description of what should change. This is a hard checkpoint: don't draft the Issue until you get a clear approval.
 
-- If they pick "نیاز به تغییر دارم" (or equivalent), ask in plain text what should change — this needs their own words, not a tappable option — then revise the plan and show the pop-up again.
-- If the task was already clear (no clarifying questions were needed in Step 2) and the very first pop-up comes back approved, move straight into Step 4 and 5 without adding extra confirmation steps in between.
+- If the person replies with corrections, revise the plan to incorporate them and then ask the same plain-text confirmation prompt again (never a pop-up or widget). Repeat until the plan is confirmed.
+- If the task was already clear (no clarifying questions were needed in Step 2) and the very first confirmation comes back approved, move straight into Step 4 and 5 without adding extra confirmation steps in between.
 
 ## Step 4 — Compose the technical prompt
 
-Once approved, translate the plan into a precise prompt for Jiffy's coding agent. Write this part in English regardless of the conversation's language, since that's what the agent expects. Structure:
+Once approved, translate the plan into a precise prompt for Jiffy's coding agent. **This prompt must always be written in English, regardless of the language the person has been using in the conversation** — this is a hard rule, not a preference: the plan, the confirmation exchange, and any summary shown to the person may stay in their language, but the technical prompt handed to Jiffy's coding agent is always in English. Translate everything from the conversation (including any corrections the person gave during confirmation) into the prompt; never carry conversation-language fragments into it. Structure:
 
 ```
 ## Task
