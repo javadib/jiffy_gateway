@@ -1,6 +1,7 @@
 """Handles agent instructions and result parsing."""
 import json
 import logging
+import re
 from typing import Any, Dict, NamedTuple
 
 from docker.models.containers import Container
@@ -44,6 +45,26 @@ def _extract_issue_text(payload: Dict[str, Any]) -> str:
     return issue.get("text", "")
 
 
+# Matches a "Suggested codebase areas" section header (with or without a
+# markdown heading marker or trailing colon) and captures everything up to
+# the next section-like heading or the end of the text.
+_SUGGESTED_AREAS_RE = re.compile(
+    r"(?im)^#{0,6}\s*suggested codebase areas\s*:?\s*\n"
+    r"(.*?)"
+    r"(?=\n#{1,6}\s+\S|\n[A-Z][A-Za-z0-9 /_-]*:\s*\n|\Z)",
+    re.DOTALL,
+)
+
+
+def _extract_suggested_areas(issue_text: str) -> str | None:
+    """Extract a "Suggested codebase areas" section from the issue text, if present."""
+    match = _SUGGESTED_AREAS_RE.search(issue_text)
+    if not match:
+        return None
+    content = match.group(1).strip()
+    return content or None
+
+
 def build_agent_instructions(payload: Dict[str, Any]) -> str:
     """Build the instructions text handed to the coding agent.
 
@@ -51,6 +72,7 @@ def build_agent_instructions(payload: Dict[str, Any]) -> str:
     assuming any particular CLI conventions.
     """
     issue_text = _extract_issue_text(payload)
+    suggested_areas = _extract_suggested_areas(issue_text)
     provider = payload.get("repo", {}).get("provider_hint", "github")
     callback_url = payload.get("callback", {}).get("url", "")
     callback_secret = payload.get("callback", {}).get("secret", "")
@@ -78,6 +100,19 @@ def build_agent_instructions(payload: Dict[str, Any]) -> str:
     else:
         body_description = "the formatted text described above (UTF-8 encoded bytes)."
 
+    where_to_start_block = ""
+    if suggested_areas:
+        where_to_start_block = (
+            "\n## Where to Start\n\n"
+            'The issue text includes a "Suggested codebase areas" section '
+            "identifying the paths most likely relevant to this task:\n\n"
+            f"{suggested_areas}\n\n"
+            "Begin your exploration there instead of scanning the entire "
+            "repository from scratch. Treat it as a starting point, not an "
+            "exhaustive boundary — follow the investigation beyond these "
+            "paths if it leads you elsewhere.\n"
+        )
+
     return f"""\
 You are a coding agent working in an isolated sandbox environment.
 
@@ -96,9 +131,15 @@ The target repository has already been cloned into:
 
     /workspace
 
+and is already checked out on the `develop` branch. This is done for you —
+under no circumstances should you run `git clone` again; the clone already
+exists and re-cloning wastes time and can conflict with the existing working
+tree. If you need to switch to a different branch or refresh the current one,
+use `git checkout <branch>` or `git pull` only.
+
 All work — reading files, making changes, running tests — happens inside that
 directory unless you have a reason to go elsewhere.
-
+{where_to_start_block}
 ## What You Must Do
 
 You own the entire rest of the workflow. Specifically:
