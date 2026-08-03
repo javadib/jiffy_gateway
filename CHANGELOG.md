@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-08-03)
+
+### Features
+
+- Configure zero-based semver and per-branch prereleases
+  ([`66a9c01`](https://github.com/javadib/jiffy_gateway/commit/66a9c01d76fa3554f09dbde3ec31b270d1921b6f))
+
+
 ## v1.9.0 (2026-08-03)
 
 ### Features
