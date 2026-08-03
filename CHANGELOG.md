@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-08-03)
+
+### Features
+
+- **jiffy-task-planner**: Add optional roadmap-item linking step (Issue #64 follow-up)
+  ([`b06309a`](https://github.com/javadib/jiffy_gateway/commit/b06309adc42a44e7f23cc758c57d2cf44c7942df))
+
+
 ## v1.8.0 (2026-07-31)
 
 ### Features
