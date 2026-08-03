@@ -2,13 +2,13 @@ name: Release
 
 on:
   push:
-    branches: [master]
+    branches: [master, develop]
 
 jobs:
   release:
     runs-on: ubuntu-latest
     concurrency:
-      group: release
+      group: release-${{ github.ref }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -43,6 +43,12 @@ jobs:
           GH_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
         run: |
           semantic-release version --changelog --push --skip-build
+
+      - name: Post changelog to GitHub Release (final releases only)
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.JIFFY_REPO_PAT }}
+        run: |
           NEW_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -n "$NEW_TAG" ]; then
             semantic-release changelog --post-to-release-tag "$NEW_TAG"
@@ -61,7 +67,7 @@ jobs:
 
   docker:
     needs: release
-    if: needs.release.outputs.released == 'true'
+    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/master'
     permissions:
       contents: read
       packages: write
