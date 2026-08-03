@@ -9,7 +9,7 @@ description: Use this skill whenever someone in a software team — Developer, T
 
 Turns a casually-described task from any software role into a Pull-Request-ready hand-off for Jiffy, with a human approval checkpoint in the middle:
 
-`casual task → role-aware plan → user approval → technical prompt → GitHub/GitLab/Gitea Issue (@jiffy mentioned) → Jiffy takes it from there`
+`casual task → role-aware plan → user approval → (optional) roadmap link → technical prompt → GitHub/GitLab/Gitea Issue (@jiffy mentioned) → Jiffy takes it from there`
 
 ## Why the shape matters
 
@@ -57,9 +57,19 @@ Present the plan **concisely**: a one-line summary plus a short bulleted list of
 Immediately follow this with an interactive pop-up asking for approval — options like "تایید می‌کنم" and "نیاز به تغییر دارم". This is a hard checkpoint: don't draft the Issue until you get a clear approval.
 
 - If they pick "نیاز به تغییر دارم" (or equivalent), ask in plain text what should change — this needs their own words, not a tappable option — then revise the plan and show the pop-up again.
-- If the task was already clear (no clarifying questions were needed in Step 2) and the very first pop-up comes back approved, move straight into Step 4 and 5 without adding extra confirmation steps in between.
+- If the task was already clear (no clarifying questions were needed in Step 2) and the very first pop-up comes back approved, move straight into Step 4 without adding extra confirmation steps in between.
 
-## Step 4 — Compose the technical prompt
+## Step 4 — Link to a roadmap item (optional, only if one exists)
+
+Some repositories track a `ROADMAP.md` at their root with short-ID checklist items (e.g. `R5`) that Jiffy's coding agent checks off automatically when it completes a matching task. **Many repositories don't have this at all — treat it as fully optional and never require it.**
+
+- Best-effort only: try to fetch `ROADMAP.md` from the repository's default branch using whichever git-provider tool is available (e.g. a "get file contents" tool for the repo's provider).
+- If the fetch fails for any reason — file doesn't exist, no such tool connected, permission error — silently skip this step and move straight to Step 5. Never tell the person "you don't have a roadmap" or otherwise surface the absence; it's a non-event.
+- If `ROADMAP.md` is found, parse its unchecked items (lines shaped like `- [ ] R# — title`). Show them as tappable options via `ask_user_input_v0` (use each item's title text as the label), plus a clear "هیچ‌کدام / بدون roadmap" option. Ask this once, as a single-select.
+- If the person picks an item, remember its ID (e.g. `R5`) — it gets added to the Issue body in Step 6. If they pick "none," proceed with no roadmap reference at all.
+- Never ask the person to create, install, or maintain a roadmap file themselves. This step only detects one if it already happens to exist.
+
+## Step 5 — Compose the technical prompt
 
 Once approved, translate the plan into a precise prompt for Jiffy's coding agent. Write this part in English regardless of the conversation's language, since that's what the agent expects. Structure:
 
@@ -73,14 +83,14 @@ Once approved, translate the plan into a precise prompt for Jiffy's coding agent
 
 This isn't shown back for a second approval — Step 3 was the approval gate. Keep it tight; don't restate project background the agent doesn't need.
 
-## Step 5 — Dispatch via Issue
+## Step 6 — Dispatch via Issue
 
 Build the Issue:
 - **Title**: short, matches the plan's title
-- **Body**: opens with `@jiffy`, followed by the Step 4 prompt
+- **Body**: opens with `@jiffy`, followed by the Step 5 prompt. If Step 4 produced a roadmap ID, add a line `Roadmap item: R#` right after the `@jiffy` line. If Step 4 found no roadmap or the person chose "none," omit this line entirely — never insert a placeholder or mention that no roadmap item was linked.
 
 Create it using whichever Git-provider tool is available in this environment for the repo's provider. If none is connected, don't attempt a raw API call or guess credentials — hand the person the finished title + body to paste themselves, and mention they could connect that provider's tool for direct posting next time.
 
-## Step 6 — Confirm and hand off
+## Step 7 — Confirm and hand off
 
 Share the Issue link (or the drafted content, if posted manually) and tell the person Jiffy will pick it up once its bot notices the `@jiffy` mention, then report back on the same Issue with a PR link once done.
