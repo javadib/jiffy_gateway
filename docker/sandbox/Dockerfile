@@ -62,15 +62,19 @@ RUN bash -c '. /etc/profile.d/nvm.sh \
 
 RUN node --version && npm --version
 
-# --- pnpm via corepack ---
+# --- pnpm via corepack (falls back to npm if corepack prepare fails) ---
 # Installed at build time (as root) so the non-root user has access without
 # permission errors. corepack is bundled with Node.js >= 16.10 / npm >= 8.3.
+# /usr/local/bin/pnpm is a symlink to a self-contained script (shebang
+# `#!/usr/bin/env node`), so it keeps working even if the agent later runs
+# `nvm install`/`nvm use` to switch the active Node.js version at runtime —
+# `env node` simply resolves to whichever node is on PATH at invocation time.
 RUN bash -c '. /etc/profile.d/nvm.sh \
     && NODE_BIN_DIR="$(dirname "$(nvm which ${NODE_VERSION})")" \
     && corepack enable \
-    && corepack prepare pnpm@latest --activate \
+    && (corepack prepare pnpm@latest --activate || npm install -g pnpm) \
     && ln -sf "$NODE_BIN_DIR/pnpm" /usr/local/bin/pnpm \
-    && ln -sf "$NODE_BIN_DIR/pnpx" /usr/local/bin/pnpx \
+    && (ln -sf "$NODE_BIN_DIR/pnpx" /usr/local/bin/pnpx || true) \
     && pnpm --version'
 
 # --- uv (Python package/version manager) ---

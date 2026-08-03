@@ -35,7 +35,17 @@ DOCKER_EMBEDDED_DNS = "127.0.0.11"
 # ---------------------------------------------------------------------------
 
 
-def get_docker_client() -> docker.DockerClient:
+# Minimum request/socket timeout (seconds) for every Docker client the
+# Gateway creates. docker-py's own default (60s) is far shorter than a
+# legitimate agent run: a non-streaming ``exec_run`` blocks on a single HTTP
+# request for the whole duration of the command, so the client's timeout is
+# what actually determines how long a task is allowed to run before Docker
+# aborts it. A task must never be killed before it has had at least 15
+# minutes (900s) to complete.
+MIN_DOCKER_CLIENT_TIMEOUT_SECONDS = 900
+
+
+def get_docker_client(timeout_seconds: int | None = None) -> docker.DockerClient:
     """Return a Docker client configured from the DOCKER_HOST environment variable.
 
     In containerised deployments the Celery worker connects to the Docker
@@ -47,17 +57,23 @@ def get_docker_client() -> docker.DockerClient:
 
     Outside containers (local development) the environment variable is
     optional — the Docker SDK falls back to the default socket automatically.
+
+    The client's request timeout is always at least
+    ``MIN_DOCKER_CLIENT_TIMEOUT_SECONDS``; pass ``timeout_seconds`` to request
+    a longer one (e.g. to match a specific job's execution window).
     """
+    effective_timeout = max(timeout_seconds or 0, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
+
     docker_host = os.environ.get("DOCKER_HOST")
     if docker_host:
         logger.debug("Using Docker host from DOCKER_HOST: %s", docker_host)
-        return docker.from_env()
+        return docker.from_env(timeout=effective_timeout)
 
     # No DOCKER_HOST set — check whether the default socket is reachable.
     # This path is fine for local development but will fail in a container
     # that does not mount the host socket.
     try:
-        client = docker.from_env()
+        client = docker.from_env(timeout=effective_timeout)
         # Lightweight connectivity check
         client.ping()
         return client
@@ -470,6 +486,30 @@ def clone_repo_in_container(
         )
     logger.info("[%d] Repository cloned into %s", task_id, WORKSPACE)
 
+    # Explicitly land on `develop` rather than trusting the remote's default
+    # branch (HEAD) — the agent must always start from a known branch, and
+    # this also lets the agent skip re-cloning to switch branches itself.
+    exit_code, (output, err) = container.exec_run(
+        cmd=["git", "fetch", "origin", "develop"],
+        workdir=WORKSPACE,
+        demux=True,
+    )
+    if exit_code != 0:
+        raise ContainerError(
+            f"git fetch origin develop failed (exit {exit_code}): {(err or b'').decode(errors='replace')}"
+        )
+
+    exit_code, (output, err) = container.exec_run(
+        cmd=["git", "checkout", "develop"],
+        workdir=WORKSPACE,
+        demux=True,
+    )
+    if exit_code != 0:
+        raise ContainerError(
+            f"git checkout develop failed (exit {exit_code}): {(err or b'').decode(errors='replace')}"
+        )
+    logger.info("[%d] Checked out develop branch in %s", task_id, WORKSPACE)
+
 
 # ---------------------------------------------------------------------------
 # Agent execution
@@ -509,9 +549,10 @@ def run_agent_in_container(
         timeout_seconds: int = 3600,
 ) -> None:
     """Run the coding agent inside the container with the given instructions."""
+    effective_timeout = max(timeout_seconds, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
     model = _get_opencode_model(container)
     logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id,
-                timeout_seconds, model)
+                effective_timeout, model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
@@ -533,11 +574,25 @@ def run_agent_in_container(
         'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
         'opencode run --auto "$INSTRUCTIONS" > /proc/1/fd/1 2>&1'
     )
-    exit_code, (output, err) = container.exec_run(
-        cmd=["bash", "-l", "-c", run_cmd],
-        demux=True,
-        workdir=WORKSPACE,
-    )
+
+    # exec_run (non-streaming) blocks on a single HTTP request for the
+    # command's entire duration, so the Docker client's own request timeout
+    # is what actually enforces (or kills) the execution window. Bump it to
+    # the requested timeout for this call, then restore it, so the agent
+    # gets its full, guaranteed window rather than being cut off by
+    # whatever timeout the client happened to be created with.
+    api_client = container.client.api
+    original_timeout = api_client.timeout
+    api_client.timeout = effective_timeout
+    try:
+        exit_code, (output, err) = container.exec_run(
+            cmd=["bash", "-l", "-c", run_cmd],
+            demux=True,
+            workdir=WORKSPACE,
+        )
+    finally:
+        api_client.timeout = original_timeout
+
     if exit_code != 0:
         raise ContainerError(
             f"Agent exited with code {exit_code}"
