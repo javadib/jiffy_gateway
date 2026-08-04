@@ -2,12 +2,17 @@
 #
 # One generic image for all tasks — includes version managers (nvm, uv, gvm)
 # for Node.js/Python/Go, git provider CLIs (gh, glab, tea), git, curl,
-# build-essential, and the OpenCode coding agent CLI.
+# build-essential, iptables (for egress restriction), and the OpenCode coding
+# agent CLI.
 #
 # The agent is responsible for installing specific language/runtime versions
 # at runtime via the version managers, and for any additional dependencies.
 #
-# Build: docker build -t jiffy-sandbox:1.1.0 .
+# Network egress restriction (enabled by default via JIFFY_SANDBOX_NETWORK_RESTRICTED)
+# is applied at container start by the Gateway using iptables inside the
+# container's own network namespace; see docker/sandbox/README.md.
+#
+# Build: docker build -t jiffy-sandbox:1.2.0 .
 # The image tag used at runtime is read from SANDBOX_IMAGE env var.
 
 FROM debian:bookworm-20260713
@@ -30,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     gnupg \
+    iptables \
     && mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
@@ -55,6 +61,21 @@ RUN bash -c '. /etc/profile.d/nvm.sh \
     && ln -sf "$NODE_BIN_DIR/npx" /usr/local/bin/npx'
 
 RUN node --version && npm --version
+
+# --- pnpm via corepack (falls back to npm if corepack prepare fails) ---
+# Installed at build time (as root) so the non-root user has access without
+# permission errors. corepack is bundled with Node.js >= 16.10 / npm >= 8.3.
+# /usr/local/bin/pnpm is a symlink to a self-contained script (shebang
+# `#!/usr/bin/env node`), so it keeps working even if the agent later runs
+# `nvm install`/`nvm use` to switch the active Node.js version at runtime —
+# `env node` simply resolves to whichever node is on PATH at invocation time.
+RUN bash -c '. /etc/profile.d/nvm.sh \
+    && NODE_BIN_DIR="$(dirname "$(nvm which ${NODE_VERSION})")" \
+    && corepack enable \
+    && (corepack prepare pnpm@latest --activate || npm install -g pnpm) \
+    && ln -sf "$NODE_BIN_DIR/pnpm" /usr/local/bin/pnpm \
+    && (ln -sf "$NODE_BIN_DIR/pnpx" /usr/local/bin/pnpx || true) \
+    && pnpm --version'
 
 # --- uv (Python package/version manager) ---
 # Installed to $HOME/.local/bin by default; add to PATH explicitly.
@@ -153,6 +174,26 @@ export PATH="/usr/local/bin:$PATH"\n\
     && chmod +x /home/jiffy/.profile \
     && chown jiffy:jiffy /home/jiffy/.profile
 
+# --- npm/pnpm network resilience ---
+# The sandbox egress to the npm registry can be slow/throttled. pnpm's default
+# fetch-timeout is 60s; large tarball downloads (e.g. next, sharp) can exceed it,
+# which aborts the request with a DOMException TIMEOUT_ERR ("error (23)") and
+# retries/retries-out. pnpm v11 only reads network settings like these from its
+# own global config file (~/.config/pnpm/config.yaml), NOT from ~/.npmrc, so
+# raise the timeout and reduce concurrency there so installs complete reliably
+# on a slow link.
+# dangerouslyAllowAllBuilds restores the classic behavior of running postinstall
+# scripts (needed by husky, esbuild, sharp, etc.) inside the trusted sandbox.
+RUN mkdir -p /home/jiffy/.config/pnpm \
+    && printf 'fetchTimeout: 600000\n\
+fetchRetries: 3\n\
+fetchRetryMintimeout: 10000\n\
+fetchRetryMaxtimeout: 60000\n\
+networkConcurrency: 6\n\
+dangerouslyAllowAllBuilds: true\n\
+' > /home/jiffy/.config/pnpm/config.yaml \
+    && chown -R jiffy:jiffy /home/jiffy/.config
+
 # 6. OpenCode config placeholder
 #    Creates a minimal default config at the standard OpenCode global config path.
 #    This file is expected to be overridden at runtime via a volume mount:
@@ -167,6 +208,7 @@ RUN echo "=== Language Runtime Verification ===" \
     && python3 --version \
     && node --version \
     && npm --version \
+    && pnpm --version \
     && go version \
     && echo "=== All runtimes verified ==="
 

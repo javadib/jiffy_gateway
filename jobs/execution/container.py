@@ -23,13 +23,29 @@ AGENT_RESULT_PATH = "/workspace/.jiffy_result.json"
 # Path to the sandbox Dockerfile, relative to the project root.
 SANDBOX_DOCKERFILE_DIR = Path(__file__).resolve().parent.parent.parent / "docker" / "sandbox"
 
+# Docker's embedded DNS resolver, reachable from every container on the
+# default bridge network.  DNS queries are allowed so the agent can resolve
+# allowlisted hosts; actual connections to non-allowlisted destinations are
+# still dropped by the OUTPUT rules.
+DOCKER_EMBEDDED_DNS = "127.0.0.11"
+
 
 # ---------------------------------------------------------------------------
 # Docker client construction
 # ---------------------------------------------------------------------------
 
 
-def get_docker_client() -> docker.DockerClient:
+# Minimum request/socket timeout (seconds) for every Docker client the
+# Gateway creates. docker-py's own default (60s) is far shorter than a
+# legitimate agent run: a non-streaming ``exec_run`` blocks on a single HTTP
+# request for the whole duration of the command, so the client's timeout is
+# what actually determines how long a task is allowed to run before Docker
+# aborts it. A task must never be killed before it has had at least 15
+# minutes (900s) to complete.
+MIN_DOCKER_CLIENT_TIMEOUT_SECONDS = 900
+
+
+def get_docker_client(timeout_seconds: int | None = None) -> docker.DockerClient:
     """Return a Docker client configured from the DOCKER_HOST environment variable.
 
     In containerised deployments the Celery worker connects to the Docker
@@ -41,17 +57,23 @@ def get_docker_client() -> docker.DockerClient:
 
     Outside containers (local development) the environment variable is
     optional — the Docker SDK falls back to the default socket automatically.
+
+    The client's request timeout is always at least
+    ``MIN_DOCKER_CLIENT_TIMEOUT_SECONDS``; pass ``timeout_seconds`` to request
+    a longer one (e.g. to match a specific job's execution window).
     """
+    effective_timeout = max(timeout_seconds or 0, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
+
     docker_host = os.environ.get("DOCKER_HOST")
     if docker_host:
         logger.debug("Using Docker host from DOCKER_HOST: %s", docker_host)
-        return docker.from_env()
+        return docker.from_env(timeout=effective_timeout)
 
     # No DOCKER_HOST set — check whether the default socket is reachable.
     # This path is fine for local development but will fail in a container
     # that does not mount the host socket.
     try:
-        client = docker.from_env()
+        client = docker.from_env(timeout=effective_timeout)
         # Lightweight connectivity check
         client.ping()
         return client
@@ -123,7 +145,7 @@ def ensure_sandbox_image() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Network helpers
+# Network restriction helpers
 # ---------------------------------------------------------------------------
 
 
@@ -136,9 +158,96 @@ def _extract_git_host(repo_url: str) -> str | None:
         return None
 
 
-def _build_network_config(repo_url: str) -> dict:
-    """Build Docker network configuration for the sandbox container."""
-    return {}
+def _effective_network_allowlist() -> list[str]:
+    """Return the effective, de-duplicated allow-list for sandbox egress.
+
+    Merges ``SANDBOX_NETWORK_ALLOWLIST`` (the defaults, or a full override)
+    with ``SANDBOX_NETWORK_ALLOWLIST_EXTRA`` (appended additions for
+    self-hosted git servers and per-install LLM provider endpoints).
+    """
+    base = list(getattr(settings, "SANDBOX_NETWORK_ALLOWLIST", []))
+    extra = list(getattr(settings, "SANDBOX_NETWORK_ALLOWLIST_EXTRA", []))
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in base + extra:
+        host = raw.strip().lower()
+        if host and host not in seen:
+            seen.add(host)
+            result.append(host)
+    return result
+
+
+def _build_network_restriction_script(allowlist: list[str]) -> str:
+    """Build a bash script that restricts container egress via iptables.
+
+    The script runs as root inside the container (which must be started with
+    the ``NET_ADMIN`` capability).  It allows loopback traffic, replies to
+    established connections, DNS queries to Docker's embedded resolver, and
+    connections to the IPs of each allowlisted host.  Everything else is
+    dropped via a default-deny OUTPUT policy.
+
+    Hosts are resolved at container start so IP changes (e.g. CDN backends)
+    are picked up per run.  This is intentionally lightweight — plain
+    ``iptables`` available in the Debian bookworm base image, no extra infra.
+    """
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        "",
+        "# Flush any existing OUTPUT rules (fresh container).",
+        "iptables -F OUTPUT",
+        "",
+        "# Allow loopback traffic.",
+        "iptables -A OUTPUT -o lo -j ACCEPT",
+        "",
+        "# Allow replies to established connections.",
+        "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "",
+        "# Allow DNS queries to Docker's embedded resolver.",
+        f"iptables -A OUTPUT -p udp --dport 53 -d {DOCKER_EMBEDDED_DNS} -j ACCEPT",
+        f"iptables -A OUTPUT -p tcp --dport 53 -d {DOCKER_EMBEDDED_DNS} -j ACCEPT",
+        "",
+        "# Allow connections to allowlisted hosts.",
+    ]
+    for host in allowlist:
+        safe_host = host.replace("'", "'\\''")
+        lines.append(
+            "for ip in $(getent ahostsv4 '{host}' 2>/dev/null | awk '{{print $1}}' | sort -u); do "
+            "iptables -A OUTPUT -d \"$ip\" -j ACCEPT; done".format(host=safe_host)
+        )
+    lines += [
+        "",
+        "# Default-deny all other egress.",
+        "iptables -P OUTPUT DROP",
+        "iptables -A OUTPUT -j DROP",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _apply_network_restriction(container: Container, allowlist: list[str], task_id: int = 0) -> None:
+    """Apply iptables egress restriction inside the container.
+
+    Runs as root (the sandbox image's default user is non-root) — the
+    container must be started with the ``NET_ADMIN`` capability.  Raises
+    ``ContainerError`` if the rules cannot be applied so the caller fails
+    closed rather than silently running an unrestricted sandbox.
+    """
+    script = _build_network_restriction_script(allowlist)
+    exit_code, (output, err) = container.exec_run(
+        cmd=["bash", "-c", script],
+        user="root",
+        demux=True,
+    )
+    if exit_code != 0:
+        detail = (err or output or b"").decode(errors="replace").strip()
+        raise ContainerError(
+            f"Failed to apply sandbox network restriction (exit {exit_code}): {detail}"
+        )
+    logger.info(
+        "[%d] Network restriction applied — egress limited to %d allowlisted host(s)",
+        task_id,
+        len(allowlist),
+    )
 
 
 def _ensure_network(client: docker.DockerClient) -> str:
@@ -154,9 +263,6 @@ def _ensure_network(client: docker.DockerClient) -> str:
         )
         logger.info("Created Docker network %s", network_name)
     return network_name
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +325,33 @@ def start_generic_sandbox_container(
 
     Manages the full lifecycle: start, yield for use, stop, and remove.
     On any error the container is always cleaned up.
+
+    When network restriction is active (the default) the container is started
+    with the ``NET_ADMIN`` capability and iptables egress rules are applied
+    before the job proceeds.  If the restriction cannot be applied the
+    container is torn down and a ``ContainerError`` is raised — the sandbox
+    never silently runs unrestricted.
     """
     client = get_docker_client()
     container = None
     try:
+        effective_allowlist = _effective_network_allowlist()
+        restricted = settings.SANDBOX_NETWORK_RESTRICTED
+
+        if restricted:
+            logger.info(
+                "[%d] Network restriction ACTIVE — egress limited to %d allowlisted host(s): %s",
+                task_id,
+                len(effective_allowlist),
+                ", ".join(effective_allowlist) or "(none)",
+            )
+        else:
+            logger.info(
+                "[%d] Network restriction DISABLED (JIFFY_SANDBOX_NETWORK_RESTRICTED=false) — "
+                "sandbox has open network egress",
+                task_id,
+            )
+
         logger.info(
             "[%d] Starting sandbox container (image=%s, mem=%s, cpus=%s)",
             task_id,
@@ -230,27 +359,43 @@ def start_generic_sandbox_container(
             settings.SANDBOX_MEM_LIMIT,
             settings.SANDBOX_CPU_LIMIT,
         )
-        # _ensure_network(client)
 
-        # networking_config = {}
-        # if repo_url:
-        #     networking_config = _build_network_config(repo_url)
+        # Surface the restriction config to the container so the startup
+        # report (and anything inside) can log it.  No secrets here.
+        container_env = dict(env_vars)
+        container_env["JIFFY_SANDBOX_NETWORK_RESTRICTED"] = "true" if restricted else "false"
+        container_env["JIFFY_SANDBOX_NETWORK_ALLOWLIST"] = ",".join(effective_allowlist)
 
-        container = client.containers.run(
-            settings.SANDBOX_IMAGE,
-            detach=True,
-            remove=False,
-            tty=True,
-            mem_limit=settings.SANDBOX_MEM_LIMIT,
-            cpuset_cpus=str(settings.SANDBOX_CPU_LIMIT),
-            environment=env_vars,
-            # network="jiffy-sandbox-net",
-            # **networking_config,
-        )
+        run_kwargs: Dict[str, Any] = {
+            "detach": True,
+            "remove": False,
+            "tty": True,
+            "mem_limit": settings.SANDBOX_MEM_LIMIT,
+            "cpuset_cpus": str(settings.SANDBOX_CPU_LIMIT),
+            "environment": container_env,
+        }
+        if restricted:
+            run_kwargs["cap_add"] = ["NET_ADMIN"]
+            # Docker only provides the 127.0.0.11 embedded DNS resolver (which
+            # the restriction script allow-lists) to containers on a
+            # user-defined network. On the default "bridge" network, Docker
+            # instead copies the host's own resolv.conf nameservers into the
+            # container — those aren't allow-listed, so once the DROP policy
+            # is in place ALL DNS resolution breaks, including for
+            # allow-listed hosts.
+            run_kwargs["network"] = _ensure_network(client)
+
+        container = client.containers.run(settings.SANDBOX_IMAGE, **run_kwargs)
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
 
         # Inject OpenCode config into the sandbox container
         _inject_opencode_config(container, task_id)
+
+        # Apply egress restriction before handing the container to the job.
+        # Fail closed: if the rules cannot be applied, raise so the job never
+        # runs against an (intended to be) restricted sandbox.
+        if restricted:
+            _apply_network_restriction(container, effective_allowlist, task_id=task_id)
 
         yield container
         logger.info("[%d] Container %s finished (id=%s)", task_id, container.short_id, container.id[:12])
@@ -341,6 +486,30 @@ def clone_repo_in_container(
         )
     logger.info("[%d] Repository cloned into %s", task_id, WORKSPACE)
 
+    # Explicitly land on `develop` rather than trusting the remote's default
+    # branch (HEAD) — the agent must always start from a known branch, and
+    # this also lets the agent skip re-cloning to switch branches itself.
+    exit_code, (output, err) = container.exec_run(
+        cmd=["git", "fetch", "origin", "develop"],
+        workdir=WORKSPACE,
+        demux=True,
+    )
+    if exit_code != 0:
+        raise ContainerError(
+            f"git fetch origin develop failed (exit {exit_code}): {(err or b'').decode(errors='replace')}"
+        )
+
+    exit_code, (output, err) = container.exec_run(
+        cmd=["git", "checkout", "develop"],
+        workdir=WORKSPACE,
+        demux=True,
+    )
+    if exit_code != 0:
+        raise ContainerError(
+            f"git checkout develop failed (exit {exit_code}): {(err or b'').decode(errors='replace')}"
+        )
+    logger.info("[%d] Checked out develop branch in %s", task_id, WORKSPACE)
+
 
 # ---------------------------------------------------------------------------
 # Agent execution
@@ -380,9 +549,10 @@ def run_agent_in_container(
         timeout_seconds: int = 3600,
 ) -> None:
     """Run the coding agent inside the container with the given instructions."""
+    effective_timeout = max(timeout_seconds, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
     model = _get_opencode_model(container)
     logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id,
-                timeout_seconds, model)
+                effective_timeout, model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
@@ -404,11 +574,25 @@ def run_agent_in_container(
         'INSTRUCTIONS=$(cat /tmp/jiffy_instructions.txt) && '
         'opencode run --auto "$INSTRUCTIONS" > /proc/1/fd/1 2>&1'
     )
-    exit_code, (output, err) = container.exec_run(
-        cmd=["bash", "-l", "-c", run_cmd],
-        demux=True,
-        workdir=WORKSPACE,
-    )
+
+    # exec_run (non-streaming) blocks on a single HTTP request for the
+    # command's entire duration, so the Docker client's own request timeout
+    # is what actually enforces (or kills) the execution window. Bump it to
+    # the requested timeout for this call, then restore it, so the agent
+    # gets its full, guaranteed window rather than being cut off by
+    # whatever timeout the client happened to be created with.
+    api_client = container.client.api
+    original_timeout = api_client.timeout
+    api_client.timeout = effective_timeout
+    try:
+        exit_code, (output, err) = container.exec_run(
+            cmd=["bash", "-l", "-c", run_cmd],
+            demux=True,
+            workdir=WORKSPACE,
+        )
+    finally:
+        api_client.timeout = original_timeout
+
     if exit_code != 0:
         raise ContainerError(
             f"Agent exited with code {exit_code}"

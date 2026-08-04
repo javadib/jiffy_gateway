@@ -17,6 +17,7 @@ echo -n '  gcc     : '; gcc --version 2>&1 | head -1 || echo 'not found'
 echo -n '  make    : '; make --version 2>&1 | head -1 || echo 'not found'
 echo -n '  uv      : '; uv --version 2>&1 || echo 'not found'
 echo -n '  gh      : '; gh --version 2>&1 | head -1 || echo 'not found'
+echo -n '  iptables: '; iptables --version 2>&1 | head -1 || echo 'not found'
 echo ''
 echo '-- Coding Agent --'
 echo -n '  opencode: '; opencode --version 2>&1 || echo 'not found'
@@ -42,4 +43,17 @@ echo '-- Network --'
 echo -n '  pypi.org : '; curl -sI --max-time 3 https://pypi.org 2>&1 | head -1 || echo 'unreachable'
 echo -n '  npmjs.org: '; curl -sI --max-time 3 https://registry.npmjs.org 2>&1 | head -1 || echo 'unreachable'
 echo -n '  github.com: '; curl -sI --max-time 3 https://github.com 2>&1 | head -1 || echo 'unreachable'
+echo ''
+echo '-- Network Restriction --'
+echo -n '  restricted : '
+case "${JIFFY_SANDBOX_NETWORK_RESTRICTED:-true}" in
+  false|0|no) echo 'NO (open egress)' ;;
+  *) echo 'YES' ;;
+esac
+echo -n '  allowlist  : '
+if [ -n "${JIFFY_SANDBOX_NETWORK_ALLOWLIST:-}" ]; then
+  echo "${JIFFY_SANDBOX_NETWORK_ALLOWLIST}"
+else
+  echo '(unset — defaults apply)'
+fi
 echo '==========================================='

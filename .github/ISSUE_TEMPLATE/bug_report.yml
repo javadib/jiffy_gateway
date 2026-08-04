@@ -1,0 +1,62 @@
+name: Bug report
+description: File a bug report to help us improve the project.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report. Please provide
+        as much detail as possible so the issue can be reproduced and fixed.
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: A clear and concise description of what the bug is.
+      placeholder: Tell us what happened...
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Scroll down to '...'
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: A clear and concise description of what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: |
+        Add any logs, error messages, or screenshots that help explain the
+        problem. If applicable, add screenshots to help explain your issue.
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Version / environment
+      description: |
+        The version of the software and relevant environment details
+        (OS, runtime version, browser, etc.).
+      placeholder: "e.g. v1.2.0, Python 3.12, Ubuntu 24.04"
+    validations:
+      required: true

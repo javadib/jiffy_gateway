@@ -28,7 +28,7 @@ _allowed_hosts_raw = os.environ.get("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_raw.split(",") if h.strip()] if _allowed_hosts_raw else ["localhost", "127.0.0.1"]
 
 
-__version__ = "1.10.0"
+__version__ = "0.1.0-rc.1"
 
 try:
     with open(BASE_DIR / "pyproject.toml", "rb") as f:
@@ -118,7 +118,7 @@ CELERY_TASK_ROUTES = {
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 
 # Sandbox container settings
-SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.1.0")
+SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "jiffy-sandbox:1.2.0")
 SANDBOX_MEM_LIMIT = os.environ.get("SANDBOX_MEM_LIMIT", "1g")
 SANDBOX_CPU_LIMIT = os.environ.get("SANDBOX_CPU_LIMIT", "1")
 SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", "")
@@ -127,25 +127,54 @@ SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", ""
 # Set to "false" to leave containers running for debugging.
 SANDBOX_CLEANUP = os.environ.get("JIFFY_SANDBOX_CLEANUP", "true").lower() in ("true", "1", "yes")
 
-# Network allow-list for sandbox containers (hostnames or CIDRs).
-# Containers can only reach hosts matching these entries.
-# At minimum, include the package registries for Python/Node/Go plus the
-# git remote host for each provider in use.
+# Whether to restrict sandbox container network egress to an allow-list.
+# Default is restricted — the sandbox must never silently run unrestricted.
+# Set to "false" to fully disable the restriction (open network) for debugging.
+SANDBOX_NETWORK_RESTRICTED = os.environ.get("JIFFY_SANDBOX_NETWORK_RESTRICTED", "true").lower() in ("true", "1", "yes")
+
+# Network allow-list for sandbox containers (hostnames).
+# Containers can only reach hosts matching these entries when network
+# restriction is active.  At minimum, include the package registries for
+# Python/Node/Go/Rust plus the git remote hosts for each provider in use.
 _default_network_allowlist = ",".join([
     "pypi.org",
     "files.pythonhosted.org",
     "registry.npmjs.org",
+    "crates.io",
+    "static.crates.io",
     "proxy.golang.org",
     "sum.golang.org",
     "github.com",
+    "api.github.com",
+    "objects.githubusercontent.com",
+    "codeload.github.com",
     "gitlab.com",
     "gitea.com",
 ])
+# Full override of the default allow-list.  Unset to use the defaults above.
 SANDBOX_NETWORK_ALLOWLIST = [
     h.strip()
     for h in os.environ.get("SANDBOX_NETWORK_ALLOWLIST", _default_network_allowlist).split(",")
     if h.strip()
 ]
+# Additional hosts appended to the allow-list on top of the defaults (or the
+# SANDBOX_NETWORK_ALLOWLIST override).  Use this for self-hosted git server
+# instances and the LLM provider endpoint OpenCode is configured to use —
+# both vary per install and cannot be hardcoded.
+SANDBOX_NETWORK_ALLOWLIST_EXTRA = [
+    h.strip()
+    for h in os.environ.get("SANDBOX_NETWORK_ALLOWLIST_EXTRA", "").split(",")
+    if h.strip()
+]
+# Effective, de-duplicated allow-list used at container start.
+_effective_allowlist: list[str] = []
+_seen_hosts: set[str] = set()
+for _host in SANDBOX_NETWORK_ALLOWLIST + SANDBOX_NETWORK_ALLOWLIST_EXTRA:
+    _host = _host.strip().lower()
+    if _host and _host not in _seen_hosts:
+        _seen_hosts.add(_host)
+        _effective_allowlist.append(_host)
+SANDBOX_NETWORK_EFFECTIVE_ALLOWLIST = _effective_allowlist
 
 
 # Password validation
@@ -187,7 +216,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Logging
 LOGGING = {
-    "version": 1,
+    "version": 0,
     "disable_existing_loggers": False,
     "formatters": {
         "verbose": {
