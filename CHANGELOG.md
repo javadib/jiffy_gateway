@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.2 (2026-08-09)
+
+### Features
+
+- Implement sandbox container TTL management and cleanup tasks
+  ([`c61b4c1`](https://github.com/javadib/jiffy_gateway/commit/c61b4c1943fbc3218d55fd55725e0295fd0010a0))
+
+
 ## v0.1.0-rc.1 (2026-08-04)
 
 ### Bug Fixes
