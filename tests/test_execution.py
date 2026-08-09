@@ -21,6 +21,7 @@ from jobs.execution.container import (
     ensure_sandbox_image,
     get_docker_client,
     remove_expired_container,
+    run_agent_in_container,
     start_generic_sandbox_container,
 )
 from jobs.execution.exceptions import ContainerError
@@ -1249,3 +1250,201 @@ class ExpireSandboxContainerTaskTest(TestCase):
                 # Calling the task function directly (not via apply_async) still
                 # goes through self.retry(), which raises a Retry exception.
                 expire_sandbox_container(container_id="a" * 64, task_id=9)
+
+
+# ---------------------------------------------------------------------------
+# OOM detection for the agent's exec run
+# ---------------------------------------------------------------------------
+
+
+class RunAgentInContainerTest(TestCase):
+    """Unit tests for run_agent_in_container's exit-code / OOM handling."""
+
+    def _make_container(self, run_exit_code, oom_killed=False, reload_error=None):
+        container = MagicMock()
+        container.short_id = "abc123"
+        # First exec_run call writes the instructions file (must succeed for
+        # these tests); the second is the actual agent run.
+        container.exec_run.side_effect = [
+            (0, (b"", b"")),
+            (run_exit_code, (b"agent output", b"")),
+        ]
+        if reload_error is not None:
+            container.reload.side_effect = reload_error
+        else:
+            container.attrs = {"State": {"OOMKilled": oom_killed}}
+        return container
+
+    @patch("jobs.execution.container._get_opencode_model", return_value="anthropic/claude")
+    def test_successful_run_raises_nothing(self, mock_model):
+        container = self._make_container(run_exit_code=0)
+        run_agent_in_container(container, "do the thing", task_id=1)
+        container.reload.assert_not_called()
+
+    @override_settings(SANDBOX_MEM_LIMIT="1g")
+    @patch("jobs.execution.container._get_opencode_model", return_value="anthropic/claude")
+    def test_oom_killed_reports_explicit_oom_error(self, mock_model):
+        container = self._make_container(run_exit_code=137, oom_killed=True)
+
+        with self.assertRaises(ContainerError) as ctx:
+            run_agent_in_container(container, "do the thing", task_id=1)
+
+        message = str(ctx.exception)
+        self.assertIn("out-of-memory", message.lower())
+        self.assertIn("1g", message)
+        self.assertIn("137", message)
+        container.reload.assert_called_once()
+
+    @patch("jobs.execution.container._get_opencode_model", return_value="anthropic/claude")
+    def test_non_oom_exit_code_reports_generic_error(self, mock_model):
+        container = self._make_container(run_exit_code=1, oom_killed=False)
+
+        with self.assertRaises(ContainerError) as ctx:
+            run_agent_in_container(container, "do the thing", task_id=1)
+
+        self.assertEqual(str(ctx.exception), "Agent exited with code 1")
+        self.assertNotIn("out-of-memory", str(ctx.exception).lower())
+        container.reload.assert_called_once()
+
+    @patch("jobs.execution.container._get_opencode_model", return_value="anthropic/claude")
+    def test_oom_state_unreadable_falls_back_to_generic_reporting(self, mock_model):
+        """If OOMKilled can't be determined, the original failure must not be masked."""
+        container = self._make_container(
+            run_exit_code=137, reload_error=RuntimeError("docker-socket-proxy unreachable")
+        )
+
+        with self.assertRaises(ContainerError) as ctx:
+            run_agent_in_container(container, "do the thing", task_id=1)
+
+        self.assertEqual(str(ctx.exception), "Agent exited with code 137")
+
+
+# ---------------------------------------------------------------------------
+# Callback attempted/succeeded metrics — no more "N/A"
+# ---------------------------------------------------------------------------
+
+
+class CallbackMetricsTest(TestCase):
+    """Unit tests for callback attempted/succeeded metric tracking."""
+
+    def _create_task(self, **kwargs):
+        defaults = {
+            "provider": "github",
+            "repo_url": "https://github.com/user/repo",
+            "issue_external_id": "100",
+            "callback_url": "https://example.com/cb",
+            "callback_secret": "sec",
+            "status": "running",
+        }
+        defaults.update(kwargs)
+        return Task.objects.create(**defaults)
+
+    def _make_result(self, **overrides):
+        result = {
+            "status": "done",
+            "branch_name": None,
+            "pr_url": None,
+            "programming_language": None,
+            "summary": None,
+            "technical_report": None,
+            "error_message": None,
+            "model": None,
+            "callback": None,
+        }
+        result.update(overrides)
+        return AgentResult(**result)
+
+    def test_metrics_false_false_when_result_is_none(self):
+        from jobs.tasks import _agent_callback_metrics
+
+        self.assertEqual(_agent_callback_metrics(None), (False, False))
+
+    def test_metrics_false_false_when_callback_field_missing(self):
+        from jobs.tasks import _agent_callback_metrics
+
+        self.assertEqual(_agent_callback_metrics(self._make_result(callback=None)), (False, False))
+
+    def test_metrics_false_false_when_callback_not_a_dict(self):
+        from jobs.tasks import _agent_callback_metrics
+
+        self.assertEqual(_agent_callback_metrics(self._make_result(callback="oops")), (False, False))
+
+    def test_metrics_reflect_real_agent_values(self):
+        from jobs.tasks import _agent_callback_metrics
+
+        result = self._make_result(callback={"attempted": True, "succeeded": False, "error": "HTTP 500"})
+        self.assertEqual(_agent_callback_metrics(result), (True, False))
+
+        result = self._make_result(callback={"attempted": True, "succeeded": True, "error": None})
+        self.assertEqual(_agent_callback_metrics(result), (True, True))
+
+    @patch("jobs.tasks.send_fallback_callback")
+    def test_handle_callback_logs_real_booleans_not_na_when_result_is_none(self, mock_fallback):
+        """Regression test: the log used to print the literal string 'N/A'."""
+        from jobs.tasks import _handle_callback
+
+        mock_fallback.return_value = True
+        task = self._create_task()
+
+        with self.assertLogs("jobs.tasks", level="WARNING") as cm:
+            _handle_callback(task, None, status="failed", error_message="boom")
+
+        messages = [r.getMessage() for r in cm.records]
+        self.assertTrue(any("attempted=False, succeeded=False" in m for m in messages))
+        self.assertFalse(any("N/A" in m for m in messages))
+
+    @patch("jobs.tasks.send_fallback_callback")
+    def test_handle_callback_logs_fallback_success_outcome(self, mock_fallback):
+        from jobs.tasks import _handle_callback
+
+        mock_fallback.return_value = True
+        task = self._create_task()
+
+        with self.assertLogs("jobs.tasks", level="INFO") as cm:
+            _handle_callback(task, None, status="failed", error_message="boom")
+
+        messages = [r.getMessage() for r in cm.records]
+        self.assertTrue(
+            any("Gateway fallback callback attempted=True succeeded=True" in m for m in messages)
+        )
+
+    @patch("jobs.tasks.send_fallback_callback")
+    def test_handle_callback_logs_fallback_failure_outcome(self, mock_fallback):
+        from jobs.tasks import _handle_callback
+
+        mock_fallback.return_value = False
+        task = self._create_task()
+
+        with self.assertLogs("jobs.tasks", level="ERROR") as cm:
+            _handle_callback(task, None, status="failed", error_message="boom")
+
+        messages = [r.getMessage() for r in cm.records]
+        self.assertTrue(
+            any("Gateway fallback callback attempted=True succeeded=False" in m for m in messages)
+        )
+
+    @patch("jobs.tasks.send_fallback_callback")
+    def test_handle_callback_skips_fallback_when_agent_already_succeeded(self, mock_fallback):
+        from jobs.tasks import _handle_callback
+
+        task = self._create_task()
+        result = self._make_result(callback={"attempted": True, "succeeded": True, "error": None})
+
+        _handle_callback(task, result, status="done")
+
+        mock_fallback.assert_not_called()
+
+    @patch("jobs.tasks.send_fallback_callback")
+    def test_handle_callback_falls_back_when_agent_attempted_but_failed(self, mock_fallback):
+        from jobs.tasks import _handle_callback
+
+        mock_fallback.return_value = True
+        task = self._create_task()
+        result = self._make_result(callback={"attempted": True, "succeeded": False, "error": "HTTP 500"})
+
+        with self.assertLogs("jobs.tasks", level="WARNING") as cm:
+            _handle_callback(task, result, status="done")
+
+        mock_fallback.assert_called_once()
+        messages = [r.getMessage() for r in cm.records]
+        self.assertTrue(any("attempted=True, succeeded=False" in m for m in messages))

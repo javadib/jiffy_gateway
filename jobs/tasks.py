@@ -52,14 +52,20 @@ def _update_status(task: Task, status: str) -> None:
     task.save(update_fields=["status", "updated_at"])
 
 
-def _agent_callback_succeeded(result: AgentResult | None) -> bool:
-    """Return True if the agent successfully delivered its own callback."""
+def _agent_callback_metrics(result: AgentResult | None) -> tuple[bool, bool]:
+    """Return (attempted, succeeded) for the agent's own callback attempt.
+
+    Always real booleans — never a placeholder like ``"N/A"`` — so these
+    values stay consistently typed for logging/metrics whether or not the
+    agent produced a result at all (e.g. it never got to write one because
+    the container was killed).
+    """
     if result is None:
-        return False
+        return False, False
     cb = result.callback
     if not isinstance(cb, dict):
-        return False
-    return bool(cb.get("attempted")) and bool(cb.get("succeeded"))
+        return False, False
+    return bool(cb.get("attempted")), bool(cb.get("succeeded"))
 
 
 def _handle_callback(
@@ -75,9 +81,12 @@ def _handle_callback(
     """Handle callback delivery: agent-first, Gateway fallback.
 
     If the agent already delivered the callback successfully, skip Gateway
-    callback.  Otherwise fall back to the Gateway sending via the spec.
+    callback.  Otherwise fall back to the Gateway sending via the spec, and
+    log the fallback's own attempted/succeeded outcome too.
     """
-    if _agent_callback_succeeded(result):
+    agent_attempted, agent_succeeded = _agent_callback_metrics(result)
+
+    if agent_attempted and agent_succeeded:
         _task_log(
             task.id,
             logging.INFO,
@@ -90,12 +99,12 @@ def _handle_callback(
         task.id,
         logging.WARNING,
         "Agent callback not delivered (attempted=%s, succeeded=%s) — Gateway falling back",
-        result.callback.get("attempted", False) if result else "N/A",
-        result.callback.get("succeeded", False) if result else "N/A",
+        agent_attempted,
+        agent_succeeded,
         provider=task.provider,
     )
 
-    send_fallback_callback(
+    fallback_succeeded = send_fallback_callback(
         task,
         status=status,
         summary=summary,
@@ -103,6 +112,14 @@ def _handle_callback(
         branch_name=branch_name,
         pr_url=pr_url,
         error_message=error_message,
+    )
+    _task_log(
+        task.id,
+        logging.INFO if fallback_succeeded else logging.ERROR,
+        "Gateway fallback callback attempted=%s succeeded=%s",
+        True,
+        fallback_succeeded,
+        provider=task.provider,
     )
 
 

@@ -614,6 +614,31 @@ def _get_opencode_model(container: Container) -> str:
     return "unknown"
 
 
+def _check_oom_killed(container: Container, task_id: int = 0) -> bool:
+    """Return whether the container's main process was killed by an OOM event.
+
+    Reloads the container's state through the same client the container was
+    created with (``container.reload()`` calls back through
+    ``container.client.api`` — the Docker Socket Proxy, never a direct
+    socket) and reads Docker's own ``State.OOMKilled`` flag, which the
+    kernel/Docker set authoritatively rather than us guessing from the exit
+    code alone. If the state can't be read for any reason, returns False so
+    the caller falls back to generic exit-code reporting instead of masking
+    the original failure.
+    """
+    try:
+        container.reload()
+        return bool(container.attrs.get("State", {}).get("OOMKilled", False))
+    except Exception as e:
+        logger.warning(
+            "[%d] Could not determine OOM status for container %s: %s",
+            task_id,
+            container.short_id,
+            e,
+        )
+        return False
+
+
 def run_agent_in_container(
         container: Container,
         instructions: str,
@@ -671,6 +696,13 @@ def run_agent_in_container(
         api_client.timeout = original_timeout
 
     if exit_code != 0:
+        if _check_oom_killed(container, task_id=task_id):
+            raise ContainerError(
+                f"Agent process was killed by an out-of-memory (OOM) event — the "
+                f"sandbox container exceeded its memory limit "
+                f"({settings.SANDBOX_MEM_LIMIT}) and was killed by the kernel "
+                f"(exit code {exit_code})."
+            )
         raise ContainerError(
             f"Agent exited with code {exit_code}"
         )

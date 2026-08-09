@@ -84,7 +84,7 @@ def send_callback(
         pr_url: str | None = None,
         error_message: str | None = None,
         model: str | None = None,
-) -> None:
+) -> bool:
     """Send a callback to task.callback_url using the provider's callback spec.
 
     Retries up to MAX_RETRIES times on failure. Logs failures without
@@ -98,6 +98,10 @@ def send_callback(
         pr_url: Optional PR/MR URL if one was opened.
         error_message: Optional error message if the task failed.
         model: Optional LLM model used for the task.
+
+    Returns:
+        True if the callback was delivered (2xx response) within
+        MAX_RETRIES attempts, False otherwise.
     """
     try:
         spec = get_callback_spec(task.provider)
@@ -107,9 +111,9 @@ def send_callback(
             task.provider,
             task.id,
         )
-        return
+        return False
 
-    _send_callback_via_spec(
+    return _send_callback_via_spec(
         spec=spec,
         task_id=task.id,
         callback_url=task.callback_url,
@@ -131,11 +135,15 @@ def send_fallback_callback(
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
-) -> None:
+) -> bool:
     """Gateway fallback callback using the provider's spec.
 
     Called when the agent did not attempt or failed its own callback attempt.
     Uses the same declarative spec the agent was given.
+
+    Returns:
+        True if the callback was delivered (2xx response) within
+        MAX_RETRIES attempts, False otherwise.
     """
     try:
         spec = get_callback_spec(task.provider)
@@ -145,9 +153,9 @@ def send_fallback_callback(
             task.provider,
             task.id,
         )
-        return
+        return False
 
-    _send_callback_via_spec(
+    return _send_callback_via_spec(
         spec=spec,
         task_id=task.id,
         callback_url=task.callback_url,
@@ -172,11 +180,15 @@ def _send_callback_via_spec(
     branch_name: str | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
-) -> None:
+) -> bool:
     """Low-level callback delivery using a declarative spec.
 
     Shared by ``send_callback`` (Gateway-owned fallback) and the agent's own
     first-attempt logic (documented in the agent instructions).
+
+    Returns:
+        True if a 2xx response was received within MAX_RETRIES attempts,
+        False otherwise.
     """
     method = spec["method"]
     url = callback_url
@@ -205,7 +217,7 @@ def _send_callback_via_spec(
                     task_id,
                     attempt,
                 )
-                return
+                return True
             logger.warning(
                 "Callback for task %d returned %d (attempt %d/%d)",
                 task_id,
@@ -233,3 +245,4 @@ def _send_callback_via_spec(
         callback_url,
         status,
     )
+    return False

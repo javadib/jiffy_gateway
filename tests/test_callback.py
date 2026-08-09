@@ -321,6 +321,31 @@ class TestSendCallback(TestCase):
         self.assertIn("## Reasoning", body)
         self.assertIn("Because Z.", body)
 
+    @patch("apps.ingestion.callback.requests.request")
+    def test_returns_true_on_success(self, mock_request):
+        mock_request.return_value = MagicMock(status_code=200)
+
+        result = send_callback(self.task, status="done")
+
+        self.assertTrue(result)
+
+    @patch("apps.ingestion.callback.time.sleep")
+    @patch("apps.ingestion.callback.requests.request")
+    def test_returns_false_when_retries_exhausted(self, mock_request, mock_sleep):
+        mock_request.return_value = MagicMock(status_code=500)
+
+        result = send_callback(self.task, status="failed", error_message="Error")
+
+        self.assertFalse(result)
+
+    def test_returns_false_for_unknown_provider(self):
+        self.task.provider = "bitbucket"
+        self.task.save()
+
+        result = send_callback(self.task, status="done")
+
+        self.assertFalse(result)
+
 
 class TestSendFallbackCallback(TestCase):
     """Tests for the Gateway fallback callback path."""
@@ -403,3 +428,27 @@ class TestSendFallbackCallback(TestCase):
         body = mock_request.call_args[1]["data"].decode("utf-8")
         self.assertIn("### Technical Report", body)
         self.assertIn("Task completed.", body)
+
+    @patch("apps.ingestion.callback.requests.request")
+    def test_returns_true_on_success(self, mock_request):
+        mock_request.return_value = MagicMock(status_code=200)
+
+        result = send_fallback_callback(self.task, status="failed", error_message="err")
+
+        self.assertTrue(result)
+
+    @patch("apps.ingestion.callback.requests.request")
+    def test_returns_false_when_retries_exhausted(self, mock_request):
+        mock_request.return_value = MagicMock(status_code=500)
+
+        result = send_fallback_callback(self.task, status="failed", error_message="err")
+
+        self.assertFalse(result)
+
+    def test_returns_false_for_unknown_provider(self):
+        self.task.provider = "bitbucket"
+        self.task.save()
+
+        result = send_fallback_callback(self.task, status="failed", error_message="err")
+
+        self.assertFalse(result)
