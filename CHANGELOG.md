@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-rc.3 (2026-08-09)
+
+### Refactoring
+
+- Enhance callback functions to return success status and add OOM detection in container execution
+  ([`79819a5`](https://github.com/javadib/jiffy_gateway/commit/79819a5e57a8287b716dc8f43d7d6a8ee8b324f6))
+
+
 ## v0.1.0-rc.2 (2026-08-09)
 
 ### Features
