@@ -15,10 +15,11 @@ from jobs.execution.agent import (
 from jobs.execution.container import (
     clone_repo_in_container,
     ensure_sandbox_image,
+    remove_expired_container,
     run_agent_in_container,
     start_generic_sandbox_container,
 )
-from jobs.execution.exceptions import ExecutionError
+from jobs.execution.exceptions import ContainerError, ExecutionError
 from jobs.models import Task
 from jobs.utils.redis import load_payload_from_redis
 
@@ -292,4 +293,35 @@ def execute_task(self, task_id: int) -> None:
             provider=task.provider,
         )
         _fail_task(task, "An unexpected internal error occurred.", result=result)
+        raise self.retry(exc=e)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox container TTL
+# ---------------------------------------------------------------------------
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+    queue="execute",
+)
+def expire_sandbox_container(self, container_id: str, task_id: int = 0) -> None:
+    """Force-remove a sandbox container once it has exceeded its TTL.
+
+    Scheduled once per container at creation time (see
+    ``_schedule_container_expiry`` in ``jobs.execution.container``) to fire
+    ``SANDBOX_CONTAINER_TTL_HOURS`` later. Runs unconditionally — regardless
+    of whether the task inside the container finished, failed, or is still
+    running — as the hard backstop on container lifetime now that task
+    execution itself has no enforced time limit. Retries on transient
+    Docker/connection errors, matching the same retry policy as task
+    execution.
+    """
+    try:
+        remove_expired_container(container_id, task_id=task_id)
+    except ContainerError as e:
+        _task_log(task_id, logging.ERROR, "TTL expiry failed for container %s: %s — retrying", container_id[:12], e)
         raise self.retry(exc=e)

@@ -127,6 +127,13 @@ SANDBOX_OPENCODE_CONFIG_PATH = os.environ.get("SANDBOX_OPENCODE_CONFIG_PATH", ""
 # Set to "false" to leave containers running for debugging.
 SANDBOX_CLEANUP = os.environ.get("JIFFY_SANDBOX_CLEANUP", "true").lower() in ("true", "1", "yes")
 
+# Hard backstop on sandbox container lifetime: every container is force-removed
+# this many hours after its creation, regardless of whether the task inside it
+# is still running, finished, or failed. Task execution itself has no
+# separate time limit — this TTL is the only thing bounding how long a
+# sandbox container (and the resources it holds) can exist.
+SANDBOX_CONTAINER_TTL_HOURS = int(os.environ.get("SANDBOX_CONTAINER_TTL_HOURS", "24"))
+
 # Whether to restrict sandbox container network egress to an allow-list.
 # Default is restricted — the sandbox must never silently run unrestricted.
 # Set to "false" to fully disable the restriction (open network) for debugging.

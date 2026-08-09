@@ -1,11 +1,14 @@
 """Tests for the execution pipeline: agent instructions, result parsing, task orchestration,
 sandbox image management, and logging."""
 
+import importlib
 import json
 import logging
+import os
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, override_settings
+from docker.errors import NotFound
 
 from jobs.execution.agent import AgentResult, build_agent_instructions, read_agent_result, _extract_issue_text, _format_turns
 from jobs.execution.container import (
@@ -17,6 +20,7 @@ from jobs.execution.container import (
     _redact_url,
     ensure_sandbox_image,
     get_docker_client,
+    remove_expired_container,
     start_generic_sandbox_container,
 )
 from jobs.execution.exceptions import ContainerError
@@ -1022,8 +1026,9 @@ class NetworkRestrictionTest(TestCase):
         client.containers.run.return_value = container
         return client, container
 
+    @patch("jobs.execution.container._schedule_container_expiry")
     @patch("jobs.execution.container.get_docker_client")
-    def test_start_container_restricted_by_default(self, mock_client):
+    def test_start_container_restricted_by_default(self, mock_client, mock_schedule_expiry):
         client, container = self._mock_container_start(mock_client)
 
         with override_settings(SANDBOX_CLEANUP=False):
@@ -1040,8 +1045,9 @@ class NetworkRestrictionTest(TestCase):
         root_execs = [c for c in container.exec_run.call_args_list if c.kwargs.get("user") == "root"]
         self.assertEqual(len(root_execs), 1)
 
+    @patch("jobs.execution.container._schedule_container_expiry")
     @patch("jobs.execution.container.get_docker_client")
-    def test_start_container_unrestricted_skips_cap_and_rules(self, mock_client):
+    def test_start_container_unrestricted_skips_cap_and_rules(self, mock_client, mock_schedule_expiry):
         client, container = self._mock_container_start(mock_client)
 
         with override_settings(SANDBOX_CLEANUP=False, SANDBOX_NETWORK_RESTRICTED=False):
@@ -1053,8 +1059,9 @@ class NetworkRestrictionTest(TestCase):
         env = run_kwargs.kwargs["environment"]
         self.assertEqual(env["JIFFY_SANDBOX_NETWORK_RESTRICTED"], "false")
 
+    @patch("jobs.execution.container._schedule_container_expiry")
     @patch("jobs.execution.container.get_docker_client")
-    def test_start_container_restriction_failure_fails_closed(self, mock_client):
+    def test_start_container_restriction_failure_fails_closed(self, mock_client, mock_schedule_expiry):
         client = MagicMock()
         mock_client.return_value = client
         container = MagicMock()
@@ -1070,8 +1077,9 @@ class NetworkRestrictionTest(TestCase):
 
         self.assertIn("Failed to apply sandbox network restriction", str(ctx.exception))
 
+    @patch("jobs.execution.container._schedule_container_expiry")
     @patch("jobs.execution.container.get_docker_client")
-    def test_start_container_logs_restriction_state(self, mock_client):
+    def test_start_container_logs_restriction_state(self, mock_client, mock_schedule_expiry):
         mock_client.return_value = MagicMock()
         container = MagicMock()
         container.short_id = "abc123"
@@ -1097,3 +1105,147 @@ class NetworkRestrictionTest(TestCase):
         messages = [r.getMessage() for r in cm.records]
         disabled = [m for m in messages if "Network restriction DISABLED" in m]
         self.assertTrue(disabled, "Expected a DISABLED restriction log line")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox container TTL
+# ---------------------------------------------------------------------------
+
+
+class ContainerTTLSettingsTest(TestCase):
+    """SANDBOX_CONTAINER_TTL_HOURS: default value and env var override."""
+
+    def test_current_settings_default_to_24_hours(self):
+        """The test environment doesn't set the override — value must be 24."""
+        from django.conf import settings
+
+        self.assertEqual(settings.SANDBOX_CONTAINER_TTL_HOURS, 24)
+
+    def test_ttl_defaults_to_24_hours_when_env_var_unset(self):
+        from config.settings import base as settings_base
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SANDBOX_CONTAINER_TTL_HOURS", None)
+            importlib.reload(settings_base)
+            self.assertEqual(settings_base.SANDBOX_CONTAINER_TTL_HOURS, 24)
+        importlib.reload(settings_base)  # restore for subsequent tests
+
+    def test_ttl_override_via_env_var(self):
+        from config.settings import base as settings_base
+
+        with patch.dict(os.environ, {"SANDBOX_CONTAINER_TTL_HOURS": "6"}):
+            importlib.reload(settings_base)
+            self.assertEqual(settings_base.SANDBOX_CONTAINER_TTL_HOURS, 6)
+        importlib.reload(settings_base)  # restore for subsequent tests
+
+
+class ScheduleContainerExpiryTest(TestCase):
+    """Container creation schedules a TTL-based expiry — no execution timeout involved."""
+
+    def _mock_container_start(self, docker_client):
+        client = MagicMock()
+        docker_client.return_value = client
+        container = MagicMock()
+        container.short_id = "abc123"
+        container.id = "b" * 64
+        container.exec_run.return_value = (0, (b"ok", b""))
+        client.containers.run.return_value = container
+        return client, container
+
+    @patch("jobs.tasks.expire_sandbox_container.apply_async")
+    @patch("jobs.execution.container.get_docker_client")
+    def test_expiry_scheduled_with_default_ttl_countdown(self, mock_docker_client, mock_apply_async):
+        client, container = self._mock_container_start(mock_docker_client)
+
+        with override_settings(SANDBOX_CLEANUP=False, SANDBOX_CONTAINER_TTL_HOURS=24):
+            with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}):
+                pass
+
+        mock_apply_async.assert_called_once_with(args=[container.id, 1], countdown=24 * 3600)
+
+    @patch("jobs.tasks.expire_sandbox_container.apply_async")
+    @patch("jobs.execution.container.get_docker_client")
+    def test_expiry_scheduled_with_overridden_ttl_countdown(self, mock_docker_client, mock_apply_async):
+        client, container = self._mock_container_start(mock_docker_client)
+
+        with override_settings(SANDBOX_CLEANUP=False, SANDBOX_CONTAINER_TTL_HOURS=2):
+            with start_generic_sandbox_container(1, {"REPO_TOKEN": "tok"}):
+                pass
+
+        mock_apply_async.assert_called_once_with(args=[container.id, 1], countdown=2 * 3600)
+
+
+class RemoveExpiredContainerTest(TestCase):
+    """Unit tests for remove_expired_container — the TTL cleanup mechanism."""
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_removes_container_past_ttl(self, mock_docker_client):
+        client = MagicMock()
+        mock_docker_client.return_value = client
+        container = MagicMock()
+        client.containers.get.return_value = container
+
+        remove_expired_container("c" * 64, task_id=5)
+
+        client.containers.get.assert_called_once_with("c" * 64)
+        container.stop.assert_called_once()
+        container.remove.assert_called_once_with(force=True)
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_noop_when_container_already_gone(self, mock_docker_client):
+        client = MagicMock()
+        mock_docker_client.return_value = client
+        client.containers.get.side_effect = NotFound("no such container")
+
+        remove_expired_container("d" * 64, task_id=5)  # must not raise
+
+        client.containers.get.assert_called_once_with("d" * 64)
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_removes_container_even_if_stop_fails(self, mock_docker_client):
+        """A container that's already stopped/unresponsive should still be force-removed."""
+        client = MagicMock()
+        mock_docker_client.return_value = client
+        container = MagicMock()
+        container.stop.side_effect = RuntimeError("already stopped")
+        client.containers.get.return_value = container
+
+        remove_expired_container("e" * 64, task_id=5)
+
+        container.remove.assert_called_once_with(force=True)
+
+    @patch("jobs.execution.container.get_docker_client")
+    def test_uses_docker_socket_proxy_client(self, mock_docker_client):
+        """Cleanup must go through get_docker_client (the Docker Socket Proxy path), never a raw client."""
+        client = MagicMock()
+        mock_docker_client.return_value = client
+        container = MagicMock()
+        client.containers.get.return_value = container
+
+        remove_expired_container("f" * 64, task_id=5)
+
+        mock_docker_client.assert_called_once()
+
+
+class ExpireSandboxContainerTaskTest(TestCase):
+    """Unit tests for the expire_sandbox_container Celery task."""
+
+    @patch("jobs.tasks.remove_expired_container")
+    def test_calls_remove_expired_container(self, mock_remove):
+        from jobs.tasks import expire_sandbox_container
+
+        expire_sandbox_container(container_id="a" * 64, task_id=9)
+
+        mock_remove.assert_called_once_with("a" * 64, task_id=9)
+
+    def test_retries_on_container_error(self):
+        from jobs.tasks import expire_sandbox_container
+
+        with patch(
+            "jobs.tasks.remove_expired_container",
+            side_effect=ContainerError("docker unreachable"),
+        ):
+            with self.assertRaises(Exception):
+                # Calling the task function directly (not via apply_async) still
+                # goes through self.retry(), which raises a Retry exception.
+                expire_sandbox_container(container_id="a" * 64, task_id=9)

@@ -35,17 +35,17 @@ DOCKER_EMBEDDED_DNS = "127.0.0.11"
 # ---------------------------------------------------------------------------
 
 
-# Minimum request/socket timeout (seconds) for every Docker client the
-# Gateway creates. docker-py's own default (60s) is far shorter than a
-# legitimate agent run: a non-streaming ``exec_run`` blocks on a single HTTP
-# request for the whole duration of the command, so the client's timeout is
-# what actually determines how long a task is allowed to run before Docker
-# aborts it. A task must never be killed before it has had at least 15
-# minutes (900s) to complete.
-MIN_DOCKER_CLIENT_TIMEOUT_SECONDS = 900
+# Default request/socket timeout (seconds) for quick, bounded Docker admin
+# calls (create/list/inspect/stop/remove). This is unrelated to how long a
+# task is allowed to run — the agent's own exec call explicitly requests an
+# unbounded timeout (see run_agent_in_container), since task execution has
+# no enforced maximum duration. Resource usage over time is instead bounded
+# at the container level by SANDBOX_CONTAINER_TTL_HOURS (see
+# _schedule_container_expiry / remove_expired_container below).
+DEFAULT_DOCKER_CLIENT_TIMEOUT_SECONDS = 60
 
 
-def get_docker_client(timeout_seconds: int | None = None) -> docker.DockerClient:
+def get_docker_client() -> docker.DockerClient:
     """Return a Docker client configured from the DOCKER_HOST environment variable.
 
     In containerised deployments the Celery worker connects to the Docker
@@ -58,11 +58,14 @@ def get_docker_client(timeout_seconds: int | None = None) -> docker.DockerClient
     Outside containers (local development) the environment variable is
     optional — the Docker SDK falls back to the default socket automatically.
 
-    The client's request timeout is always at least
-    ``MIN_DOCKER_CLIENT_TIMEOUT_SECONDS``; pass ``timeout_seconds`` to request
-    a longer one (e.g. to match a specific job's execution window).
+    The returned client's request timeout is ``DEFAULT_DOCKER_CLIENT_TIMEOUT_SECONDS``,
+    which is appropriate for the quick admin calls this client is used for
+    (create/list/inspect/stop/remove). The one call that legitimately runs
+    for a long, unbounded time — the agent's own exec call — overrides the
+    timeout on its client directly for the duration of that call; see
+    ``run_agent_in_container``.
     """
-    effective_timeout = max(timeout_seconds or 0, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
+    effective_timeout = DEFAULT_DOCKER_CLIENT_TIMEOUT_SECONDS
 
     docker_host = os.environ.get("DOCKER_HOST")
     if docker_host:
@@ -311,6 +314,71 @@ def _inject_opencode_config(container: Container, task_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Container TTL — hard backstop on container lifetime
+# ---------------------------------------------------------------------------
+
+
+def _schedule_container_expiry(container_id: str, task_id: int = 0) -> None:
+    """Schedule the ``expire_sandbox_container`` Celery task for this container.
+
+    Fires ``SANDBOX_CONTAINER_TTL_HOURS`` from now, via Celery's countdown
+    mechanism on the existing ``execute`` queue — no separate beat scheduler
+    needed. Runs unconditionally, independent of the task's own status, so
+    every sandbox container has a hard upper bound on its lifetime.
+
+    Imported lazily to avoid a circular import: ``jobs.tasks`` imports from
+    this module at load time, so importing it back at module level here
+    would deadlock the import.
+    """
+    from jobs.tasks import expire_sandbox_container
+
+    ttl_seconds = settings.SANDBOX_CONTAINER_TTL_HOURS * 3600
+    expire_sandbox_container.apply_async(args=[container_id, task_id], countdown=ttl_seconds)
+    logger.info(
+        "[%d] Container %s scheduled to expire in %sh",
+        task_id,
+        container_id[:12],
+        settings.SANDBOX_CONTAINER_TTL_HOURS,
+    )
+
+
+def remove_expired_container(container_id: str, task_id: int = 0) -> None:
+    """Force-remove a sandbox container once it has exceeded its TTL.
+
+    Called by the ``expire_sandbox_container`` Celery task. Goes through the
+    same Docker Socket Proxy client as every other container operation — no
+    direct Docker socket access. A no-op if the container was already
+    cleaned up normally (the common case).
+    """
+    client = get_docker_client()
+    try:
+        container = client.containers.get(container_id)
+    except NotFound:
+        logger.info(
+            "[%d] TTL expiry: container %s already removed — nothing to do",
+            task_id,
+            container_id[:12],
+        )
+        return
+
+    logger.warning(
+        "[%d] TTL expiry: container %s exceeded its %sh TTL — force-removing",
+        task_id,
+        container_id[:12],
+        settings.SANDBOX_CONTAINER_TTL_HOURS,
+    )
+    try:
+        container.stop(timeout=5)
+    except (NotFound, Exception):
+        pass
+    try:
+        container.remove(force=True)
+        logger.info("[%d] TTL expiry: container %s removed", task_id, container_id[:12])
+    except NotFound:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Container lifecycle
 # ---------------------------------------------------------------------------
 
@@ -387,6 +455,10 @@ def start_generic_sandbox_container(
 
         container = client.containers.run(settings.SANDBOX_IMAGE, **run_kwargs)
         logger.info("[%d] Container %s started (id=%s)", task_id, container.short_id, container.id[:12])
+
+        # Hard backstop on container lifetime, independent of task status —
+        # see _schedule_container_expiry.
+        _schedule_container_expiry(container.id, task_id=task_id)
 
         # Inject OpenCode config into the sandbox container
         _inject_opencode_config(container, task_id)
@@ -546,13 +618,19 @@ def run_agent_in_container(
         container: Container,
         instructions: str,
         task_id: int = 0,
-        timeout_seconds: int = 3600,
 ) -> None:
-    """Run the coding agent inside the container with the given instructions."""
-    effective_timeout = max(timeout_seconds, MIN_DOCKER_CLIENT_TIMEOUT_SECONDS)
+    """Run the coding agent inside the container with the given instructions.
+
+    There is no enforced execution time limit — the agent runs until it
+    finishes or fails on its own. Resource usage over time is instead
+    bounded at the container level: every sandbox container is force-removed
+    ``SANDBOX_CONTAINER_TTL_HOURS`` after its creation regardless of the
+    task's status inside it (see ``_schedule_container_expiry``), so a
+    hung/runaway agent cannot occupy a container indefinitely.
+    """
     model = _get_opencode_model(container)
-    logger.info("[%d] Running agent in container %s (timeout=%ds, model=%s)", task_id, container.short_id,
-                effective_timeout, model)
+    logger.info("[%d] Running agent in container %s (no execution time limit, model=%s)", task_id, container.short_id,
+                model)
 
     escaped_instructions = instructions.replace("\\", "\\\\").replace("'", "'\\''")
     write_cmd = f"printf '%s' '{escaped_instructions}' > /tmp/jiffy_instructions.txt"
@@ -577,13 +655,12 @@ def run_agent_in_container(
 
     # exec_run (non-streaming) blocks on a single HTTP request for the
     # command's entire duration, so the Docker client's own request timeout
-    # is what actually enforces (or kills) the execution window. Bump it to
-    # the requested timeout for this call, then restore it, so the agent
-    # gets its full, guaranteed window rather than being cut off by
-    # whatever timeout the client happened to be created with.
+    # is what would enforce (or kill) the execution window. Set it to no
+    # timeout at all so the agent is never cut off before it finishes or
+    # fails on its own — there is no artificial execution deadline.
     api_client = container.client.api
     original_timeout = api_client.timeout
-    api_client.timeout = effective_timeout
+    api_client.timeout = None
     try:
         exit_code, (output, err) = container.exec_run(
             cmd=["bash", "-l", "-c", run_cmd],
